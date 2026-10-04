@@ -1,0 +1,34 @@
+# lore-auth-server configuration.
+# Copy to /etc/lore-auth-server/config.toml and adjust the values marked "CHANGE".
+
+[server]
+# Address advertised to Lore clients and loreserver (gRPC). CHANGE.
+# Must be https:// with a certificate trusted by the clients, unless it is a loopback address.
+public_grpc_url = "https://lore.example.com:41342"
+# Base URL of the browser login page. CHANGE.
+public_web_url = "https://lore.example.com:41343"
+
+grpc_listen = "0.0.0.0:41342"
+web_listen = "0.0.0.0:41343"
+
+# TLS certificate chain and key used by both listeners (for example from Let's Encrypt). CHANGE.
+tls_cert = "/etc/lore-auth-server/tls/fullchain.pem"
+tls_key = "/etc/lore-auth-server/tls/privkey.pem"
+
+# Database, signing key and the public JWKS file.
+data_dir = "/var/lib/lore-auth-server"
+
+[tokens]
+# Host names (or IP addresses) of the Lore servers that accept these tokens. CHANGE.
+# Lore clients refuse to send a token to a server that is not listed here.
+audience = ["lore.example.com"]
+issuer = "lore-auth-server"
+# How long a sign-in lasts. Lore clients cannot refresh it, so users sign in again after this.
+user_token_ttl_hours = 720
+# Lifetime of the per-repository tokens the client requests automatically.
+access_token_ttl_minutes = 60
+login_session_ttl_minutes = 10
+
+[policy]
+# Who may create repositories: "everyone" (any signed-in user) or "admins".
+repository_create = "everyone"

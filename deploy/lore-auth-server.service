@@ -1,0 +1,22 @@
+[Unit]
+Description=Lore auth server (user/password sign-in for Lore)
+After=network-online.target
+Wants=network-online.target
+Before=loreserver.service
+
+[Service]
+Type=simple
+User=lore-auth
+Group=lore-auth
+ExecStart=/opt/lore-auth-server/venv/bin/lore-auth-server --config /etc/lore-auth-server/config.toml serve
+Restart=on-failure
+RestartSec=5
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lore-auth-server
+
+[Install]
+WantedBy=multi-user.target

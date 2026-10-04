@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+dist/
+build/
+*.egg-info/
+# Local runtime data: never commit keys, databases or real configs.
+data/
+*.db
+*.pem
+*.key
+*.crt
+config.toml
