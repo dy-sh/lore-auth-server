@@ -1,4 +1,4 @@
-"""HTTP(S) listener: the browser login page and the JWKS document for loreserver."""
+"""HTTP(S) listener: the browser login page, the JWKS document for loreserver and the admin API."""
 
 from __future__ import annotations
 
@@ -12,12 +12,13 @@ from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from .admin_api import AdminApi, Response
 from .service import Authority
 
 log = logging.getLogger(__name__)
 
 JWKS_PATHS = ("/jwks.json", "/.well-known/jwks.json")
-MAX_FAILURES = 5          # failed sign-ins per client address ...
+MAX_FAILURES = 5          # failed attempts per client address ...
 FAILURE_WINDOW = 300      # ... within this many seconds before throttling
 
 PAGE = """<!doctype html>
@@ -64,16 +65,18 @@ EXPIRED = """<h1>Link expired</h1>
 <p>This sign-in link is no longer valid. Start signing in again from your Lore client.</p>"""
 
 
-class _Throttle:
-    def __init__(self):
+class Throttle:
+    def __init__(self, max_failures: int = MAX_FAILURES, window: int = FAILURE_WINDOW):
+        self.max_failures = max_failures
+        self.window = window
         self._failures: dict[str, list[float]] = defaultdict(list)
         self._lock = threading.Lock()
 
     def blocked(self, address: str) -> bool:
         with self._lock:
-            recent = [t for t in self._failures[address] if t > time.time() - FAILURE_WINDOW]
+            recent = [t for t in self._failures[address] if t > time.time() - self.window]
             self._failures[address] = recent
-            return len(recent) >= MAX_FAILURES
+            return len(recent) >= self.max_failures
 
     def fail(self, address: str) -> None:
         with self._lock:
@@ -81,20 +84,25 @@ class _Throttle:
 
 
 def make_handler(authority: Authority):
-    throttle = _Throttle()
+    throttle = Throttle()
     jwks_body = json.dumps(authority.issuer.jwks).encode()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "lore-auth-server"
         sys_version = ""
+        # Separate from the login page throttle, so that one cannot lock users out of the other.
+        admin_api = AdminApi(authority, Throttle())
 
         def log_message(self, fmt, *args):
             log.debug("%s %s", self.client_address[0], fmt % args)
 
-        def _send(self, status: int, body: bytes, content_type: str) -> None:
+        def _send(self, status: int, body: bytes, content_type: str, headers: dict[str, str] | None = None) -> None:
             self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
+            if status != 204:
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Referrer-Policy", "no-referrer")
@@ -105,7 +113,21 @@ def make_handler(authority: Authority):
         def _page(self, status: int, body: str) -> None:
             self._send(status, PAGE.format(body=body).encode(), "text/html; charset=utf-8")
 
+        def _admin(self, method: str) -> bool:
+            """Serve an admin API request; False when the path is not part of the (enabled) API."""
+            if not self.admin_api.handles(urlparse(self.path).path):
+                return False
+            response: Response = self.admin_api.handle(
+                method, self.path, self.headers, self.rfile, self.client_address[0]
+            )
+            body = b"" if response.body is None else json.dumps(response.body).encode()
+            headers = {"X-Content-Type-Options": "nosniff", **response.headers}
+            self._send(response.status, body, "application/json", headers)
+            return True
+
         def do_GET(self):
+            if self._admin("GET"):
+                return
             url = urlparse(self.path)
             if url.path in JWKS_PATHS:
                 self._send(200, jwks_body, "application/json")
@@ -120,7 +142,21 @@ def make_handler(authority: Authority):
             else:
                 self._send(404, b"not found", "text/plain")
 
+        def do_PUT(self):
+            if not self._admin("PUT"):
+                self._send(404, b"not found", "text/plain")
+
+        def do_PATCH(self):
+            if not self._admin("PATCH"):
+                self._send(404, b"not found", "text/plain")
+
+        def do_DELETE(self):
+            if not self._admin("DELETE"):
+                self._send(404, b"not found", "text/plain")
+
         def do_POST(self):
+            if self._admin("POST"):
+                return
             if urlparse(self.path).path != "/login":
                 self._send(404, b"not found", "text/plain")
                 return

@@ -34,6 +34,10 @@ class TokenError(Exception):
     pass
 
 
+class TokenExpired(TokenError):
+    pass
+
+
 class TokenIssuer:
     """Issues RS256 JWTs in the shape Lore clients and loreserver expect."""
 
@@ -114,13 +118,16 @@ class TokenIssuer:
             header_b64, claims_b64, signature_b64 = token.split(".")
             header = json.loads(_b64_decode(header_b64))
             claims = json.loads(_b64_decode(claims_b64))
-        except (ValueError, json.JSONDecodeError) as e:
+            signature = _b64_decode(signature_b64)
+        except ValueError as e:  # also covers JSON, base64 and UTF-8 decoding errors
             raise TokenError("malformed token") from e
+        if not isinstance(header, dict) or not isinstance(claims, dict):
+            raise TokenError("malformed token")
         if header.get("alg") != "RS256" or header.get("kid") != self.kid:
             raise TokenError("token was not issued by this service")
         try:
             self._key.public_key().verify(
-                _b64_decode(signature_b64),
+                signature,
                 f"{header_b64}.{claims_b64}".encode(),
                 padding.PKCS1v15(),
                 hashes.SHA256(),
@@ -130,5 +137,5 @@ class TokenIssuer:
         if claims.get("iss") != self.config.issuer:
             raise TokenError("unexpected issuer")
         if int(claims.get("exp", 0)) < time.time():
-            raise TokenError("token expired")
+            raise TokenExpired("token expired")
         return claims

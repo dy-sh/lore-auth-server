@@ -15,6 +15,16 @@ from pathlib import Path
 ALL_REPOSITORIES = "urc-*"
 USER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$")
 REPOSITORY_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+MIN_PASSWORD_LENGTH = 8
+
+
+class NotFoundError(ValueError):
+    """The named user or repository does not exist."""
+
+
+class ConflictError(ValueError):
+    """The change conflicts with existing data (duplicate user, ambiguous repository name)."""
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -70,6 +80,16 @@ def _hash_api_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def api_key_id(key: str) -> str:
+    """Public identifier of an API key: a prefix of its digest, safe to show."""
+    return _hash_api_key(key)[:12]
+
+
+def _check_password(password: str) -> None:
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"password must be at least {MIN_PASSWORD_LENGTH} characters")
+
+
 def resource_for(repository: str) -> str:
     """Map a repository ID or '*' to a Lore resource ID (urc-<id> or urc-*)."""
     if repository in ("*", "all", ALL_REPOSITORIES):
@@ -94,6 +114,14 @@ class Repository:
     resource_id: str
     name: str
     creator: str
+
+
+@dataclass
+class ApiKey:
+    id: str
+    user: str
+    label: str
+    created_at: int
 
 
 class Store:
@@ -124,8 +152,9 @@ class Store:
     def add_user(self, name: str, password: str, display_name: str = "", is_admin: bool = False) -> None:
         if not USER_NAME_RE.match(name):
             raise ValueError("user name may contain letters, digits and _ . @ - (max 64 chars)")
+        _check_password(password)
         if self.get_user(name):
-            raise ValueError(f"user {name} already exists")
+            raise ConflictError(f"user {name} already exists")
         self._execute(
             "INSERT INTO users (name, display_name, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?, ?)",
             (name, display_name or name, hash_password(password), int(is_admin), int(time.time())),
@@ -152,20 +181,25 @@ class Store:
         return None
 
     def set_password(self, name: str, password: str) -> None:
+        _check_password(password)
         if not self._execute("UPDATE users SET password_hash = ? WHERE name = ?", (hash_password(password), name)):
-            raise ValueError(f"no such user: {name}")
+            raise NotFoundError(f"no such user: {name}")
+
+    def set_display_name(self, name: str, display_name: str) -> None:
+        if not self._execute("UPDATE users SET display_name = ? WHERE name = ?", (display_name or name, name)):
+            raise NotFoundError(f"no such user: {name}")
 
     def set_admin(self, name: str, is_admin: bool) -> None:
         if not self._execute("UPDATE users SET is_admin = ? WHERE name = ?", (int(is_admin), name)):
-            raise ValueError(f"no such user: {name}")
+            raise NotFoundError(f"no such user: {name}")
 
     def set_disabled(self, name: str, disabled: bool) -> None:
         if not self._execute("UPDATE users SET disabled = ? WHERE name = ?", (int(disabled), name)):
-            raise ValueError(f"no such user: {name}")
+            raise NotFoundError(f"no such user: {name}")
 
     def remove_user(self, name: str) -> None:
         if not self._execute("DELETE FROM users WHERE name = ?", (name,)):
-            raise ValueError(f"no such user: {name}")
+            raise NotFoundError(f"no such user: {name}")
 
     # Repositories
 
@@ -197,14 +231,14 @@ class Store:
             if len(rows) == 1:
                 return rows[0]["resource_id"]
             if len(rows) > 1:
-                raise ValueError(f"repository name {name_or_id} is ambiguous, use its ID") from None
-            raise ValueError(f"unknown repository: {name_or_id} (use its 32-character ID)") from None
+                raise ConflictError(f"repository name {name_or_id} is ambiguous, use its ID") from None
+            raise NotFoundError(f"unknown repository: {name_or_id} (use its 32-character ID)") from None
 
     # Grants
 
     def grant(self, user: str, resource_id: str) -> None:
         if not self.get_user(user):
-            raise ValueError(f"no such user: {user}")
+            raise NotFoundError(f"no such user: {user}")
         self._execute("INSERT OR IGNORE INTO grants (user_name, resource_id) VALUES (?, ?)", (user, resource_id))
 
     def revoke(self, user: str, resource_id: str) -> None:
@@ -214,11 +248,20 @@ class Store:
         rows = self._query("SELECT resource_id FROM grants WHERE user_name = ? ORDER BY resource_id", (user,))
         return [r["resource_id"] for r in rows]
 
+    def list_grants(self, user: str | None = None, resource_id: str | None = None) -> list[tuple[str, str]]:
+        """(user, resource ID) pairs, optionally limited to one user and/or one exact resource ID."""
+        rows = self._query(
+            "SELECT user_name, resource_id FROM grants WHERE (?1 IS NULL OR user_name = ?1) "
+            "AND (?2 IS NULL OR resource_id = ?2) ORDER BY user_name, resource_id",
+            (user, resource_id),
+        )
+        return [(r["user_name"], r["resource_id"]) for r in rows]
+
     # API keys
 
     def create_api_key(self, user: str, label: str = "") -> str:
         if not self.get_user(user):
-            raise ValueError(f"no such user: {user}")
+            raise NotFoundError(f"no such user: {user}")
         key = "lak_" + secrets.token_urlsafe(32)
         self._execute(
             "INSERT INTO api_keys (key_hash, user_name, label, created_at) VALUES (?, ?, ?, ?)",
@@ -233,11 +276,17 @@ class Store:
         user = self.get_user(rows[0]["user_name"])
         return user if user and not user.disabled else None
 
-    def list_api_keys(self, user: str) -> list[tuple[str, str, int]]:
+    def api_keys(self, user: str | None = None) -> list[ApiKey]:
+        """API keys without their secrets, of one user or of everyone."""
         rows = self._query(
-            "SELECT key_hash, label, created_at FROM api_keys WHERE user_name = ? ORDER BY created_at", (user,)
+            "SELECT key_hash, user_name, label, created_at FROM api_keys WHERE (?1 IS NULL OR user_name = ?1) "
+            "ORDER BY user_name, created_at",
+            (user,),
         )
-        return [(r["key_hash"][:12], r["label"], r["created_at"]) for r in rows]
+        return [ApiKey(r["key_hash"][:12], r["user_name"], r["label"], r["created_at"]) for r in rows]
+
+    def list_api_keys(self, user: str) -> list[tuple[str, str, int]]:
+        return [(k.id, k.label, k.created_at) for k in self.api_keys(user)]
 
     def revoke_api_keys(self, user: str) -> int:
         return self._execute("DELETE FROM api_keys WHERE user_name = ?", (user,))

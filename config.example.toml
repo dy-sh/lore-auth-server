@@ -15,6 +15,11 @@ web_listen = "0.0.0.0:41343"
 tls_cert = "/etc/lore-auth-server/tls/fullchain.pem"
 tls_key = "/etc/lore-auth-server/tls/privkey.pem"
 
+# Serve the admin API (docs/admin-api.md) on the login page listener, so GUI clients
+# can manage users, grants and API keys remotely. Only administrators can use it.
+# Set to false to manage users only with the command line on this host.
+admin_api = true
+
 # Database, signing key and the public JWKS file.
 data_dir = "/var/lib/lore-auth-server"
 

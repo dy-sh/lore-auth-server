@@ -28,6 +28,8 @@ class Config:
     # plain text (only for loopback testing or behind a TLS terminating proxy).
     tls_cert: str = ""
     tls_key: str = ""
+    # Serve the admin API (docs/admin-api.md) on the web listener.
+    admin_api: bool = True
 
     data_dir: Path = Path("/var/lib/lore-auth-server")
     user_token_ttl_hours: int = 24 * 30
@@ -59,7 +61,7 @@ def load_config(path: Path) -> Config:
         public_web_url=server["public_web_url"].rstrip("/"),
         audience=list(tokens["audience"]),
     )
-    for key in ("grpc_listen", "web_listen", "tls_cert", "tls_key"):
+    for key in ("grpc_listen", "web_listen", "tls_cert", "tls_key", "admin_api"):
         if key in server:
             setattr(cfg, key, server[key])
     if "data_dir" in server:
@@ -72,6 +74,8 @@ def load_config(path: Path) -> Config:
 
     if cfg.repository_create not in ("everyone", "admins"):
         raise ValueError("policy.repository_create must be 'everyone' or 'admins'")
+    if not isinstance(cfg.admin_api, bool):
+        raise ValueError("server.admin_api must be true or false")
     if bool(cfg.tls_cert) != bool(cfg.tls_key):
         raise ValueError("server.tls_cert and server.tls_key must be set together")
     if not cfg.audience:

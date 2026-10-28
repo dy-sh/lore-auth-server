@@ -19,7 +19,7 @@ from . import __version__
 from .config import DEFAULT_CONFIG_PATH, Config, load_config
 from .proto import auth_api_pb2_grpc, rebac_api_pb2_grpc
 from .service import Authority, RebacApi, UrcAuthApi
-from .store import Store
+from .store import MIN_PASSWORD_LENGTH, Store
 from .tokens import TokenIssuer
 from .web import start_web_server
 
@@ -71,8 +71,8 @@ def _read_password(args) -> str:
         password = getpass.getpass("Password: ")
         if getpass.getpass("Repeat password: ") != password:
             raise SystemExit("passwords do not match")
-    if len(password) < 8:
-        raise SystemExit("password must be at least 8 characters")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise SystemExit(f"password must be at least {MIN_PASSWORD_LENGTH} characters")
     return password
 
 

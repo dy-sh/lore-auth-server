@@ -10,6 +10,7 @@ Lore Server has no user accounts of its own. It verifies JWTs and delegates sign
 - **Per-repository access.** Grant users access to specific repositories or to all of them. Repository creators get access to their own repositories automatically.
 - **Administrators.** Admins can access, delete and manage every repository.
 - **API keys** for scripts and CI: `lore auth login --token-type api-key --token <key>`.
+- **Remote administration (optional).** An HTTPS JSON [admin API](docs/admin-api.md) lets GUI clients manage users, access and API keys. Only administrators can use it.
 - **Works with `lore://` (QUIC).** Clients get proper access tokens, so the fast QUIC transport keeps working.
 - **One file of state.** Users, grants and keys live in SQLite. Passwords are hashed with scrypt.
 
@@ -164,6 +165,8 @@ Changes apply immediately: no token reissue is needed. A user who already has an
 
 Use `--password-stdin` with `user add` and `user passwd` to script account creation.
 
+Administrators can also do all of this remotely, from a GUI client, through the [admin API](#admin-api).
+
 ## Access rules
 
 | Who | Access |
@@ -193,11 +196,29 @@ For CI, create an API key and sign in without a browser:
 lore auth login lore://lore.example.com:41337 --token-type api-key --token "$LORE_API_KEY"
 ```
 
+## Admin API
+
+GUI clients can manage users, grants and API keys remotely through an HTTPS JSON API. It is served on the login page listener (port 41343 by default), so it needs no extra port. The protocol is open and specified in [docs/admin-api.md](docs/admin-api.md), so other auth services for Lore can implement it too.
+
+- **Discovery.** Clients look for `GET /.well-known/lore-admin` on the login page's address. A client that gets no valid answer there hides its administration features.
+- **Sign-in.** Requests carry the user token the client got when the user signed in (`Authorization: Bearer <token>`). Only administrators can use the API. Any signed-in user can call `GET /api/v1/me` to find out whether they are one.
+- **Same rules as the command line.** The endpoints use the same operations and checks as the `lore-auth` commands. In addition, administrators can't revoke their own administrator rights, or disable or delete their own account, through the API.
+- **Audit.** Every change is logged with the administrator's name and address. Passwords, tokens and keys are never logged.
+
+The API is **on by default**. To turn it off, set `admin_api = false` under `[server]` and restart the service. Discovery and every endpoint then answer `404`, and clients hide their administration features.
+
+```bash
+curl -s https://lore.example.com:41343/.well-known/lore-admin
+# {"protocol": "lore-admin", "version": 1, "base": "/api/v1", "features": ["users", "grants", "repositories", "api-keys"]}
+```
+
 ## Configuration reference
 
 See [`config.example.toml`](config.example.toml). All keys except `public_grpc_url`, `public_web_url` and `tokens.audience` have defaults. Set `LORE_AUTH_CONFIG` to change the default config path and `LORE_AUTH_LOG_LEVEL=DEBUG` for verbose logs.
 
 Without `tls_cert`/`tls_key` both listeners serve plain text. Use that only for local testing with loopback URLs, or behind a reverse proxy that terminates TLS and supports HTTP/2 (gRPC).
+
+`server.admin_api` (default `true`) serves the [admin API](#admin-api) on the login page listener. Set it to `false` to manage users only with the command line on the server.
 
 ## Security notes
 
@@ -206,6 +227,7 @@ Without `tls_cert`/`tls_key` both listeners serve plain text. Use that only for 
 - Removing or disabling a user stops new sign-ins and token exchanges at once. Access tokens already issued remain valid until they expire.
 - Failed password attempts are throttled per client address (5 attempts per 5 minutes).
 - The login page is only as safe as its transport: always use HTTPS for remote users.
+- An administrator's user token controls every account through the admin API, and it stays valid for `user_token_ttl_hours` (30 days by default). If you only manage users on the server, set `admin_api = false`.
 
 ## Limitations
 
