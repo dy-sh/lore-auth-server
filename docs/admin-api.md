@@ -9,7 +9,7 @@ An open HTTPS JSON protocol for managing the users and repository access of a Lo
 - [Discovery](#discovery)
 - [Authentication](#authentication)
 - [Errors](#errors)
-- [Endpoints](#endpoints): [me](#get-me), [users](#users), [grants](#grants), [repositories](#repositories), [API keys](#api-keys)
+- [Endpoints](#endpoints): [me](#get-me), [users](#users), [grants](#grants), [repositories](#repositories), [API keys](#api-keys), [servers](#servers)
 - [Versioning](#versioning)
 - [Security considerations](#security-considerations)
 - [Notes on lore-auth-server](#notes-on-lore-auth-server)
@@ -26,6 +26,7 @@ This protocol fills that gap, so that a GUI client can offer the same administra
 - **grants**: which user may access which repository;
 - **repositories**: the repositories the auth service knows;
 - **API keys**: keys for scripts and CI.
+- **servers**: the Lore servers that use the auth service, so that a client finds every repository after one sign-in. Teams may run a Lore server per project behind one auth service, and the auth service knows repositories but not where they live.
 
 ## The API is optional
 
@@ -70,7 +71,7 @@ Content-Type: application/json
   "protocol": "lore-admin",
   "version": 1,
   "base": "/api/v1",
-  "features": ["users", "grants", "repositories", "api-keys"]
+  "features": ["users", "grants", "repositories", "api-keys", "servers"]
 }
 ```
 
@@ -88,6 +89,7 @@ Content-Type: application/json
 | `grants` | `GET /grants`, `PUT /grants`, `DELETE /grants` |
 | `repositories` | `GET /repositories` |
 | `api-keys` | `GET /api-keys`, `POST /api-keys`, `DELETE /api-keys/{name}` |
+| `servers` | `GET /servers`, `PUT /servers`, `DELETE /servers` |
 
 A server that has the API turned off answers `404` here, like a server that doesn't implement it.
 
@@ -105,7 +107,7 @@ This is the `user_token` from `UrcAuthApi` (`GetAuthSession`, `ExchangeAPIKeyFor
 |---|---|---|---|
 | `401` | `unauthenticated` | No token, a malformed, forged, foreign or expired token, a repository access token, or a user that no longer exists. The response has a `WWW-Authenticate: Bearer` header. | Ask the user to sign in again. |
 | `403` | `user_disabled` | The account is disabled. | Tell the user; signing in again won't help. |
-| `403` | `forbidden` | The user isn't an administrator. Every endpoint except `GET /me` requires administrator rights. | Hide the administration features. |
+| `403` | `forbidden` | The user isn't an administrator. Every endpoint except `GET /me` and `GET /servers` requires administrator rights. | Hide the administration features. |
 | `429` | `too_many_requests` | Too many failed attempts from this address. The `Retry-After` header gives the wait in seconds. | Wait, then retry. |
 
 The server checks the user's current state on every request. Revoked administrator rights, a disabled account or a deleted user take effect at once, even for tokens issued earlier.
@@ -456,6 +458,74 @@ HTTP/1.1 200 OK
 
 Errors: `404 not_found` for an unknown user.
 
+### Servers
+
+The Lore servers that use this auth service. Clients list them after sign-in to show the repositories of every server, not only the one the user signed in through. A server object:
+
+```json
+{"url": "lore://lore.example.com:41344", "label": "Game"}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `url` | string | Server address, `scheme://host[:port]` without a path. The scheme is lower case; a trailing `/` is dropped. |
+| `label` | string | Free text, may be empty. |
+
+#### GET /servers
+
+Available to every signed-in user, not only administrators: the list holds addresses, and each server still hides the repositories a user has no access to.
+
+```http
+GET /api/v1/servers
+```
+
+```http
+HTTP/1.1 200 OK
+
+{
+  "servers": [
+    {"url": "lore://lore.example.com:41337", "label": ""},
+    {"url": "lore://lore.example.com:41344", "label": "Game"}
+  ]
+}
+```
+
+#### PUT /servers
+
+Adds a server, or changes its label. Adding a server that is already listed isn't an error.
+
+```http
+PUT /api/v1/servers
+Content-Type: application/json
+
+{"url": "lore://lore.example.com:41344", "label": "Game"}
+```
+
+```http
+HTTP/1.1 200 OK
+
+{"url": "lore://lore.example.com:41344", "label": "Game"}
+```
+
+Errors: `400 invalid_request` for an address that isn't `scheme://host[:port]`.
+
+#### DELETE /servers
+
+Removes a server from the list. The server itself and its repositories aren't touched.
+
+```http
+DELETE /api/v1/servers
+Content-Type: application/json
+
+{"url": "lore://lore.example.com:41344"}
+```
+
+```http
+HTTP/1.1 204 No Content
+```
+
+Errors: `404 not_found` for a server that isn't listed.
+
 ## Versioning
 
 - `version` in the discovery document is the major version of the protocol.
@@ -472,6 +542,7 @@ Errors: `404 not_found` for an unknown user.
 ## Notes on lore-auth-server
 
 - **On by default.** The API is enabled unless `admin_api = false` is set under `[server]` in the configuration file. When it is off, the discovery document and every endpoint answer `404`.
+- **Servers.** lore-auth-server doesn't learn server addresses by itself: an administrator lists them (`lore-auth-server server add lore://host:port`, or `PUT /servers`).
 - **Same rules as the command line.** The endpoints use the same store operations and checks as the `lore-auth-server` commands, so the results are the same. The API adds the lock-out protection described in [`PATCH /users/{name}`](#patch-usersname) and [`DELETE /users/{name}`](#delete-usersname), and it can change display names, which the command line can't.
 - **Limits.** User names: letters, digits and `_ . @ -`, up to 64 characters, starting with a letter or a digit. Passwords: at least 8 characters. Display names and API key labels: up to 128 characters, without control characters; surrounding spaces are trimmed. Request bodies: up to 8 KiB.
 - **Throttling.** Valid tokens are never throttled. After 5 invalid tokens (malformed, forged or from another issuer) from one address within 5 minutes, further invalid tokens from it get `429` until the window passes. This counter is separate from the login page's.

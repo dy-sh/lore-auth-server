@@ -107,9 +107,30 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(
             body,
             {"protocol": "lore-admin", "version": 1, "base": "/api/v1",
-             "features": ["users", "grants", "repositories", "api-keys"]},
+             "features": ["users", "grants", "repositories", "api-keys", "servers"]},
         )
         self.assertError(self.call("POST", "/.well-known/lore-admin", body={}), 405, "method_not_allowed")
+
+    def test_servers(self):
+        # Every signed-in user may list the servers; only administrators change the list.
+        self.assertEqual(self.call("GET", "/api/v1/servers", self.alice)[1], {"servers": []})
+        status, body, _ = self.call("PUT", "/api/v1/servers", self.root,
+                                    {"url": " LORE://lore.example.com:41344/ ", "label": "Game"})
+        self.assertEqual((status, body), (200, {"url": "lore://lore.example.com:41344", "label": "Game"}))
+        self.call("PUT", "/api/v1/servers", self.root, {"url": "lore://lore.example.com:41337"})
+        self.call("PUT", "/api/v1/servers", self.root, {"url": "lore://lore.example.com:41344", "label": "Game 2"})
+        self.assertEqual(self.call("GET", "/api/v1/servers", self.alice)[1], {"servers": [
+            {"url": "lore://lore.example.com:41337", "label": ""},
+            {"url": "lore://lore.example.com:41344", "label": "Game 2"},
+        ]})
+        self.assertError(self.call("PUT", "/api/v1/servers", self.alice, {"url": "lore://x:1"}), 403, "forbidden")
+        for bad in ("lore.example.com", "lore://host:41337/game", "lore://user@host", ""):
+            self.assertError(self.call("PUT", "/api/v1/servers", self.root, {"url": bad}), 400, "invalid_request")
+        self.assertEqual(self.call("DELETE", "/api/v1/servers", self.root, {"url": "lore://lore.example.com:41337"})[0], 204)
+        self.assertError(self.call("DELETE", "/api/v1/servers", self.root, {"url": "lore://lore.example.com:41337"}),
+                         404, "not_found")
+        self.assertEqual([s["url"] for s in self.call("GET", "/api/v1/servers", self.alice)[1]["servers"]],
+                         ["lore://lore.example.com:41344"])
 
     def test_disabled_api_is_absent(self):
         store, url = self.start_server(admin_api=False)

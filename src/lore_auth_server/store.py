@@ -1,4 +1,4 @@
-"""SQLite storage for users, repository grants, repositories and API keys."""
+"""SQLite storage for users, repository grants, repositories, API keys and Lore servers."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ from pathlib import Path
 ALL_REPOSITORIES = "urc-*"
 USER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$")
 REPOSITORY_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+# scheme://host[:port], nothing after it.
+SERVER_URL_RE = re.compile(r"^[a-z][a-z0-9+.-]*://[^/\s?#@]+$")
 MIN_PASSWORD_LENGTH = 8
 
 
@@ -45,6 +47,11 @@ CREATE TABLE IF NOT EXISTS grants (
     user_name   TEXT NOT NULL REFERENCES users(name) ON DELETE CASCADE,
     resource_id TEXT NOT NULL,
     PRIMARY KEY (user_name, resource_id)
+);
+CREATE TABLE IF NOT EXISTS servers (
+    url        TEXT PRIMARY KEY,
+    label      TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS api_keys (
     key_hash   TEXT PRIMARY KEY,
@@ -114,6 +121,22 @@ class Repository:
     resource_id: str
     name: str
     creator: str
+
+
+@dataclass
+class Server:
+    url: str
+    label: str
+
+
+def server_url(url: str) -> str:
+    """A Lore server address as stored: `scheme://host[:port]`, lower-case scheme."""
+    url = url.strip().rstrip("/")
+    scheme, sep, rest = url.partition("://")
+    url = f"{scheme.lower()}{sep}{rest}"
+    if not SERVER_URL_RE.match(url):
+        raise ValueError(f"not a server address: {url!r} (expected e.g. lore://lore.example.com:41337)")
+    return url
 
 
 @dataclass
@@ -233,6 +256,24 @@ class Store:
             if len(rows) > 1:
                 raise ConflictError(f"repository name {name_or_id} is ambiguous, use its ID") from None
             raise NotFoundError(f"unknown repository: {name_or_id} (use its 32-character ID)") from None
+
+    # Lore servers that use this service, for clients to find every repository
+
+    def add_server(self, url: str, label: str = "") -> Server:
+        url = server_url(url)
+        self._execute(
+            "INSERT INTO servers (url, label, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(url) DO UPDATE SET label = excluded.label",
+            (url, label, int(time.time())),
+        )
+        return Server(url, label)
+
+    def remove_server(self, url: str) -> None:
+        if not self._execute("DELETE FROM servers WHERE url = ?", (server_url(url),)):
+            raise NotFoundError(f"no such server: {url}")
+
+    def list_servers(self) -> list[Server]:
+        return [Server(r["url"], r["label"]) for r in self._query("SELECT url, label FROM servers ORDER BY url")]
 
     # Grants
 

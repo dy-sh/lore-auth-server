@@ -26,7 +26,7 @@ PROTOCOL = "lore-admin"
 VERSION = 1
 DISCOVERY_PATH = "/.well-known/lore-admin"
 BASE = "/api/v1"
-FEATURES = ["users", "grants", "repositories", "api-keys"]
+FEATURES = ["users", "grants", "repositories", "api-keys", "servers"]
 MAX_BODY_BYTES = 8192
 _DRAIN_LIMIT_BYTES = 1 << 20
 MAX_TEXT_LENGTH = 128  # display names and API key labels
@@ -88,6 +88,9 @@ ROUTES = [
     _route("GET", "api-keys", "list_api_keys", query={"user"}),
     _route("POST", "api-keys", "create_api_key", body=True),
     _route("DELETE", "api-keys/{}", "delete_api_keys"),
+    _route("GET", "servers", "list_servers", admin=False),
+    _route("PUT", "servers", "put_server", body=True),
+    _route("DELETE", "servers", "delete_server", body=True),
 ]
 
 
@@ -423,3 +426,18 @@ class AdminApi:
         revoked = self.store.revoke_api_keys(name)
         self._audit(call, "revoked %d API key(s) of user %s", revoked, name)
         return Response(200, {"revoked": revoked})
+
+    def list_servers(self, call: _Call) -> Response:
+        return Response(200, {"servers": [{"url": s.url, "label": s.label} for s in self.store.list_servers()]})
+
+    def put_server(self, call: _Call) -> Response:
+        body = _fields(call.body, {"url": str}, {"label": str})
+        server = self.store.add_server(_not_empty(body["url"], "url"), _text(body.get("label", ""), "label"))
+        self._audit(call, "added server %s", server.url)
+        return Response(200, {"url": server.url, "label": server.label})
+
+    def delete_server(self, call: _Call) -> Response:
+        body = _fields(call.body, {"url": str})
+        self.store.remove_server(_not_empty(body["url"], "url"))
+        self._audit(call, "removed server %s", body["url"])
+        return Response(204)

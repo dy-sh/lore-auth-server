@@ -159,7 +159,13 @@ lore-auth revoke alice my-game
 lore-auth repo list
 lore-auth apikey create ci-bot --label "build server"   # printed once
 lore-auth apikey revoke ci-bot
+
+lore-auth server add lore://lore.example.com:41344 --label "Game"   # clients find its repositories
+lore-auth server list
+lore-auth server remove lore://lore.example.com:41344
 ```
+
+If you run a Lore server per project, list every server with `lore-auth server add`: after one sign-in, clients find the repositories of all of them (`GET /servers` in the admin API, available to every user).
 
 Changes apply immediately: no token reissue is needed. A user who already has an access token for a repository keeps it until it expires (`access_token_ttl_minutes`, 60 by default).
 
@@ -198,10 +204,10 @@ lore auth login lore://lore.example.com:41337 --token-type api-key --token "$LOR
 
 ## Admin API
 
-GUI clients can manage users, grants and API keys remotely through an HTTPS JSON API. It is served on the login page listener (port 41343 by default), so it needs no extra port. The protocol is open and specified in [docs/admin-api.md](docs/admin-api.md), so other auth services for Lore can implement it too.
+GUI clients can manage users, grants, API keys and the list of Lore servers remotely through an HTTPS JSON API. It is served on the login page listener (port 41343 by default), so it needs no extra port. The protocol is open and specified in [docs/admin-api.md](docs/admin-api.md), so other auth services for Lore can implement it too.
 
 - **Discovery.** Clients look for `GET /.well-known/lore-admin` on the login page's address. A client that gets no valid answer there hides its administration features.
-- **Sign-in.** Requests carry the user token the client got when the user signed in (`Authorization: Bearer <token>`). Only administrators can use the API. Any signed-in user can call `GET /api/v1/me` to find out whether they are one.
+- **Sign-in.** Requests carry the user token the client got when the user signed in (`Authorization: Bearer <token>`). Only administrators can use the API. Any signed-in user can call `GET /api/v1/me` to find out whether they are one, and `GET /api/v1/servers` to find every Lore server.
 - **Same rules as the command line.** The endpoints use the same operations and checks as the `lore-auth` commands. In addition, administrators can't revoke their own administrator rights, or disable or delete their own account, through the API.
 - **Audit.** Every change is logged with the administrator's name and address. Passwords, tokens and keys are never logged.
 

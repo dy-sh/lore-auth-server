@@ -130,6 +130,13 @@ def build_parser() -> argparse.ArgumentParser:
     rrm = repo.add_parser("remove", help="forget a repository")
     rrm.add_argument("repository")
 
+    srv = sub.add_parser("server", help="Lore servers that use this service").add_subparsers(dest="action", required=True)
+    srv.add_parser("list", help="list servers")
+    sadd = srv.add_parser("add", help="add a server, so that clients find its repositories")
+    sadd.add_argument("url", help="server address, e.g. lore://lore.example.com:41337")
+    sadd.add_argument("--label", default="")
+    srv.add_parser("remove", help="forget a server").add_argument("url")
+
     key = sub.add_parser("apikey", help="API keys for scripts and CI").add_subparsers(dest="action", required=True)
     kc = key.add_parser("create", help="create an API key (printed once)")
     kc.add_argument("user")
@@ -195,6 +202,15 @@ def _admin_command(args, store: Store) -> None:
             print(f"repository {args.name} registered")
         elif args.action == "remove":
             store.remove_repository(store.resolve_repository(args.repository))
+            print("done")
+    elif args.cmd == "server":
+        if args.action == "list":
+            for s in store.list_servers():
+                print(f"{s.url:<40} {s.label}")
+        elif args.action == "add":
+            print(f"server {store.add_server(args.url, args.label).url} added")
+        elif args.action == "remove":
+            store.remove_server(args.url)
             print("done")
     elif args.cmd == "apikey":
         if args.action == "create":
