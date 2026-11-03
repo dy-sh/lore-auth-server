@@ -14,7 +14,7 @@ Lore Server has no user accounts of its own. It verifies JWTs and delegates sign
 - **Works with `lore://` (QUIC).** Clients get proper access tokens, so the fast QUIC transport keeps working.
 - **One file of state.** Users, grants and keys live in SQLite. Passwords are hashed with scrypt.
 
-Tested with Lore 0.10.0 (server and CLI).
+Tested with loreserver 0.10.0 and 0.11.0, the Lore CLI 0.10.0, 0.10.1 and 0.11.0, and Anchorpoint for Lore (which bundles CLI 0.10.1).
 
 ## How it works
 
@@ -36,13 +36,23 @@ The service signs tokens with its own RSA key and writes the public key to `jwks
 ## Requirements
 
 - Python 3.11 or newer.
-- A Lore server with a version compatible with Lore 0.10.0.
+- A Lore server, version 0.10.0 or newer (tested up to 0.11.0).
+- A DNS name for the server, for example `lore.example.com`. Clients use it in `lore://lore.example.com:41337`, and tokens are bound to it.
 - **A TLS certificate trusted by the client machines** for the host name in `public_grpc_url`. Lore clients only talk plain HTTP to loopback addresses, and upgrade every other auth URL to HTTPS. A certificate from a public CA, for example Let's Encrypt, avoids installing anything on user machines.
 - Two TCP ports reachable by clients: gRPC (default `41342`) and the login page (default `41343`).
 
 ## Installation
 
-The steps below assume Ubuntu/Debian and that the service runs on the same machine as loreserver.
+The steps below assume Ubuntu/Debian and that the service runs on the same machine as loreserver. They take you from an open Lore server to one that requires sign-in. When you're done, the server looks like this:
+
+```text
+lore.example.com
+  :41337 tcp+udp  loreserver          clone, push, sync
+  :41342 tcp      lore-auth-server    gRPC: tokens and permission checks (auth_url)
+  :41343 tcp      lore-auth-server    browser login page
+```
+
+The order is: install the service, get a certificate, configure and start it, create an administrator, register existing repositories, switch loreserver over, open the ports, verify. loreserver stays open until the switch in step 7.
 
 ### 1. Install the package
 
@@ -54,19 +64,56 @@ sudo python3 -m venv /opt/lore-auth-server/venv
 sudo /opt/lore-auth-server/venv/bin/pip install git+https://github.com/dy-sh/lore-auth-server.git
 ```
 
+To pin a version, append `@<tag or commit>` to the URL.
+
+The data directory is world-readable (`0755`) on purpose: loreserver runs as a different user and reads `jwks.json` from it. The database and the signing key keep their own restrictive file modes.
+
 ### 2. Get a TLS certificate
 
-With a domain name pointing at the server and port 80 free, for example:
+The certificate must be trusted by the client machines, so use a public CA such as Let's Encrypt. The same certificate is used for loreserver's QUIC endpoint in step 7, so users don't have to install a private CA either.
+
+Point an `A` record for `lore.example.com` at the server first. If your DNS provider offers a proxy (for example Cloudflare's orange cloud), turn it off for this record. Lore needs direct access to UDP 41337 and to the TCP ports above, which such proxies don't forward. For the same reason a proxy-only certificate such as a Cloudflare Origin Certificate won't work.
+
+**Option A: HTTP challenge.** Port 80 must reach the server while the certificate is issued and renewed.
 
 ```bash
 sudo apt install -y certbot
 sudo certbot certonly --standalone -d lore.example.com
-sudo install -d -o root -g lore-auth -m 0750 /etc/lore-auth-server/tls
-sudo cp /etc/letsencrypt/live/lore.example.com/{fullchain,privkey}.pem /etc/lore-auth-server/tls/
-sudo chgrp lore-auth /etc/lore-auth-server/tls/*.pem && sudo chmod 0640 /etc/lore-auth-server/tls/*.pem
 ```
 
-Repeat the copy after each renewal (a certbot `--deploy-hook` can do it and restart the service).
+**Option B: DNS challenge.** Port 80 isn't needed. Here's an example for Cloudflare, using an API token limited to *Zone → DNS → Edit* on your zone:
+
+```bash
+sudo apt install -y certbot python3-certbot-dns-cloudflare
+sudo install -d -m 0700 /etc/letsencrypt
+echo 'dns_cloudflare_api_token = <TOKEN>' | sudo tee /etc/letsencrypt/cloudflare.ini >/dev/null
+sudo chmod 0600 /etc/letsencrypt/cloudflare.ini
+sudo certbot certonly --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
+  --dns-cloudflare-propagation-seconds 30 -d lore.example.com
+```
+
+certbot has plugins for many other DNS providers.
+
+Copy the certificate to where the service reads it:
+
+```bash
+sudo install -d -o root -g lore-auth -m 0750 /etc/lore-auth-server/tls
+sudo install -m 0640 -o root -g lore-auth /etc/letsencrypt/live/lore.example.com/{fullchain,privkey}.pem /etc/lore-auth-server/tls/
+```
+
+certbot renews the certificate automatically (`certbot.timer`), but only under `/etc/letsencrypt/live`. A deploy hook copies each renewed certificate to both services and restarts them. Create `/etc/letsencrypt/renewal-hooks/deploy/lore.sh` and make it executable (`chmod 755`):
+
+```sh
+#!/bin/sh
+set -e
+[ "$RENEWED_LINEAGE" = "/etc/letsencrypt/live/lore.example.com" ] || exit 0
+install -m 0640 -o root -g lore-auth "$RENEWED_LINEAGE/fullchain.pem" "$RENEWED_LINEAGE/privkey.pem" /etc/lore-auth-server/tls/
+install -m 0640 -o root -g lore "$RENEWED_LINEAGE/fullchain.pem" "$RENEWED_LINEAGE/privkey.pem" /etc/lore/certs/letsencrypt/
+systemctl restart lore-auth-server
+systemctl restart loreserver
+```
+
+The hook assumes loreserver runs as user `lore` and reads its certificate from `/etc/lore/certs/letsencrypt/` (step 7). Adjust the names to match your setup. `certbot renew --dry-run` checks renewal, but doesn't run deploy hooks.
 
 ### 3. Configure
 
@@ -101,9 +148,44 @@ alias lore-auth='sudo -u lore-auth /opt/lore-auth-server/venv/bin/lore-auth-serv
 lore-auth user add admin --admin
 ```
 
-### 6. Connect loreserver
+### 6. Register existing repositories
 
-Print the matching loreserver configuration and add it to loreserver's config file (for example `/etc/lore/config/local.toml`):
+Repositories created before the service was enabled are unknown to it. Register them so that they can be granted by name. The easiest time is before the switch in step 7, while loreserver still lists everything without sign-in:
+
+```bash
+lore repository list lore://lore.example.com:41337     # names and IDs
+lore-auth repo add 0198f3c2a1b47c55a0e2d4f6b8c9e012 my-game
+lore-auth repo list
+```
+
+These repositories have no recorded creator. Administrators and users you grant access to can see them.
+
+### 7. Connect loreserver
+
+Back up loreserver's data and configuration first. The switch only needs a restart, but a copy makes rollback trivial:
+
+```bash
+sudo systemctl stop loreserver
+sudo tar -C / -cf /var/backups/lore-before-auth.tar var/lib/lore etc/lore    # adjust to your paths
+sudo cp -a /etc/lore/config/local.toml /etc/lore/config/local.toml.before-auth
+```
+
+Give loreserver the same certificate for its QUIC endpoint:
+
+```bash
+sudo install -d -o root -g lore -m 0750 /etc/lore/certs/letsencrypt
+sudo install -m 0640 -o root -g lore /etc/letsencrypt/live/lore.example.com/{fullchain,privkey}.pem /etc/lore/certs/letsencrypt/
+```
+
+```toml
+[server.quic.certificate]
+cert_file = "/etc/lore/certs/letsencrypt/fullchain.pem"
+pkey_file = "/etc/lore/certs/letsencrypt/privkey.pem"
+```
+
+> **Don't add a `[server.grpc.certificate]` block.** For `lore://` URLs the client reads the server's environment configuration over plain gRPC on the same port and moves the data over QUIC with TLS. With TLS on gRPC, every client fails with `Disconnected from server … failed to get environment config`.
+
+Then print the matching auth configuration and add it to loreserver's config file (for example `/etc/lore/config/local.toml`):
 
 ```bash
 lore-auth lore-config
@@ -121,23 +203,52 @@ endpoint = "file:///var/lib/lore-auth-server/jwks.json"
 auth_url = "https://lore.example.com:41342"
 ```
 
-Do not set `resource_claim` in `[server.auth]`: together with `auth_url` loreserver refuses to start. Restart loreserver and check the log:
+Do not set `resource_claim` in `[server.auth]`: together with `auth_url` loreserver refuses to start.
+
+loreserver connects to `auth_url` itself, so `lore.example.com` must resolve to a reachable address from the loreserver machine. Behind NAT, the public address usually isn't reachable from inside, because port forwarding only applies to traffic from outside. Point the name at the machine's own address in `/etc/hosts`:
 
 ```bash
-sudo systemctl restart loreserver
-sudo journalctl -u loreserver -n 60 --no-pager -o cat | grep -o "Repository authorizer: [A-Za-z]*"
+echo '<server private IP> lore.example.com' | sudo tee -a /etc/hosts
+```
+
+Start loreserver and check the log:
+
+```bash
+sudo systemctl start loreserver
+curl -i http://127.0.0.1:41339/health_check        # HTTP/1.1 200 OK
+sudo journalctl -u loreserver -n 80 --no-pager -o cat | grep -o "Repository authorizer: [A-Za-z]*"
 # Repository authorizer: AuthClientAuthorizer
 ```
 
-loreserver connects to `auth_url` itself, so the host name must also resolve to a reachable address from the loreserver machine.
+`AllowAllRepositoryAuthorizer` means the auth configuration was not picked up, and the server is still open.
 
-### 7. Register existing repositories
+### 8. Open the ports
 
-Repositories created before the service was enabled are unknown to it. Register them so that they can be granted by name:
+Clients must reach TCP 41342 (gRPC) and 41343 (login page) in addition to loreserver's 41337 (TCP and UDP). If the server is behind NAT, forward these ports and make the rules persistent. On a firewall, allow them.
+
+### 9. Verify
+
+From a client machine:
 
 ```bash
-lore repository list lore://lore.example.com:41337     # names and IDs
-lore-auth repo add 0198f3c2a1b47c55a0e2d4f6b8c9e012 my-game
+lore repository list lore://lore.example.com:41337     # [Error] Not authenticated
+lore auth login lore://lore.example.com:41337          # opens the browser; sign in as admin
+lore repository list lore://lore.example.com:41337     # lists all repositories
+lore clone lore://lore.example.com:41337/my-game
+```
+
+In Anchorpoint for Lore, cloning `lore://lore.example.com:41337/<repository>` opens the same login page.
+
+Clients must use the host name from `tokens.audience`. A client connecting by IP address won't send its token there, and the certificate won't match.
+
+### Rollback
+
+To make the server open again, restore the previous loreserver config and restart:
+
+```bash
+sudo systemctl stop loreserver
+sudo cp /etc/lore/config/local.toml.before-auth /etc/lore/config/local.toml
+sudo systemctl start loreserver
 ```
 
 ## Managing users
@@ -184,7 +295,7 @@ Administrators can also do all of this remotely, from a GUI client, through the 
 
 `policy.repository_create` controls whether every signed-in user (`everyone`) or only administrators (`admins`) can create repositories. Only the creator or an administrator can delete a repository.
 
-Lore 0.10.0 has no read-only access level: anyone who can clone can also push.
+Lore (0.10 and 0.11) has no read-only access level: anyone who can clone can also push.
 
 ## Using it as a Lore user
 
@@ -195,6 +306,16 @@ lore auth logout --auth-url https://lore.example.com:41342   # or run `lore auth
 ```
 
 GUI clients show the same login page when they need a sign-in.
+
+The client can hold several sign-ins for one server, and keeps using the one it already has. To switch users, sign out first, then sign in again:
+
+```bash
+lore auth list                                               # stored sign-ins
+lore auth logout --auth-url https://lore.example.com:41342   # removes all sign-ins for this server
+lore auth login lore://lore.example.com:41337
+```
+
+`lore auth clear` removes the sign-ins for **every** server.
 
 For CI, create an API key and sign in without a browser:
 
@@ -235,9 +356,20 @@ Without `tls_cert`/`tls_key` both listeners serve plain text. Use that only for 
 - The login page is only as safe as its transport: always use HTTPS for remote users.
 - An administrator's user token controls every account through the admin API, and it stays valid for `user_token_ttl_hours` (30 days by default). If you only manage users on the server, set `admin_api = false`.
 
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `Disconnected from server … failed to get environment config` | loreserver has `[server.grpc.certificate]`. Remove it and keep the certificate only under `[server.quic.certificate]` |
+| `Repository authorizer: AllowAllRepositoryAuthorizer` in the loreserver log | `[server.auth]` is missing from the loaded config. Check the file in the `--config` directory |
+| loreserver can't reach the auth service, or sign-in hangs after the password | `lore.example.com` doesn't resolve to a reachable address from the loreserver machine. Add it to `/etc/hosts` |
+| Certificate errors on clients | The client connects by IP or by another name, or the certificate expired. Use the name from `tokens.audience`, and check `openssl x509 -in /etc/lore-auth-server/tls/fullchain.pem -noout -enddate` |
+| A user still sees repositories after `revoke` | Access tokens already issued remain valid until they expire (`access_token_ttl_minutes`) |
+| Commands run as the wrong user | The client reuses a stored sign-in. Run `lore auth logout --auth-url …` and sign in again |
+
 ## Limitations
 
-- Lore 0.10.0 clients cannot refresh a sign-in. Users sign in again after `user_token_ttl_hours` (30 days by default).
+- Lore clients (0.10 and 0.11) cannot refresh a sign-in. Users sign in again after `user_token_ttl_hours` (30 days by default).
 - One instance per database: login sessions are kept in memory.
 - No OIDC/SSO. Epic plans to move Lore to standard OIDC; once that ships, an off-the-shelf identity provider may be a better fit.
 
