@@ -124,6 +124,42 @@ class FlowTest(unittest.TestCase):
         )
         self.assertEqual([p.resource_id for p in listed.resource_permission], [REPO_A])
 
+    def app_sign_in(self, session: str, user: str, password: str) -> tuple[int, dict]:
+        request = urllib.request.Request(
+            f"{self.config.public_web_url}/api/sign-in",
+            data=json.dumps({"session": session, "username": user, "password": password}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request) as r:
+                return r.status, json.load(r)
+        except urllib.error.HTTPError as e:
+            return e.code, json.load(e)
+
+    def test_app_sign_in_without_browser(self):
+        with urllib.request.urlopen(f"{self.config.public_web_url}/api/sign-in") as r:
+            self.assertEqual(json.load(r), {"passwordSignIn": True})
+        started = self.auth.StartAuthSession(pb.StartAuthSessionRequest(client_state="app"))
+        status, body = self.app_sign_in(started.session_code, "alice", "wrong-password")
+        self.assertEqual((status, body["error"]["code"]), (401, "wrong_credentials"))
+        status, body = self.app_sign_in(started.session_code, "alice", "alice-password")
+        self.assertEqual((status, body["user"]), (200, "alice"))
+        polled = self.auth.GetAuthSession(pb.GetAuthSessionRequest(session_code=started.session_code, client_state="app"))
+        self.assertEqual(polled.user_token.user_id, "alice")
+        status, body = self.app_sign_in(started.session_code, "alice", "alice-password")
+        self.assertEqual((status, body["error"]["code"]), (410, "session_expired"))
+
+    def test_app_sign_in_refuses_disabled_users_and_bad_requests(self):
+        self.store.add_user("bob", "bob-password")
+        self.store.set_disabled("bob", True)
+        started = self.auth.StartAuthSession(pb.StartAuthSessionRequest(client_state="app"))
+        status, body = self.app_sign_in(started.session_code, "bob", "bob-password")
+        self.assertEqual((status, body["error"]["code"]), (401, "wrong_credentials"))
+        request = urllib.request.Request(f"{self.config.public_web_url}/api/sign-in", data=b"session=x", headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(request)
+        self.assertEqual(e.exception.code, 415)
+
     def test_session_is_single_use(self):
         started = self.auth.StartAuthSession(pb.StartAuthSessionRequest(client_state="s"))
         empty = self.auth.GetAuthSession(pb.GetAuthSessionRequest(session_code=started.session_code, client_state="s"))

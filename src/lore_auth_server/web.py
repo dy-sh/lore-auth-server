@@ -1,4 +1,4 @@
-"""HTTP(S) listener: the browser login page, the JWKS document for loreserver and the admin API."""
+"""HTTP(S) listener: the browser login page, sign-in from apps, the JWKS document for loreserver and the admin API."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from .service import Authority
 log = logging.getLogger(__name__)
 
 JWKS_PATHS = ("/jwks.json", "/.well-known/jwks.json")
+# Apps that show their own sign-in form complete a Lore sign-in session here (JSON).
+SIGN_IN_PATH = "/api/sign-in"
 MAX_FAILURES = 5          # failed attempts per client address ...
 FAILURE_WINDOW = 300      # ... within this many seconds before throttling
 
@@ -113,6 +115,46 @@ def make_handler(authority: Authority):
         def _page(self, status: int, body: str) -> None:
             self._send(status, PAGE.format(body=body).encode(), "text/html; charset=utf-8")
 
+        def _json(self, status: int, body: dict) -> None:
+            self._send(status, json.dumps(body).encode(), "application/json", {"X-Content-Type-Options": "nosniff"})
+
+        def _error(self, status: int, code: str, message: str) -> None:
+            self._json(status, {"error": {"code": code, "message": message}})
+
+        def _sign_in(self) -> None:
+            """The login form without the browser: an app sends the session from the
+            sign-in link with the user name and password. Same checks and throttle as the page."""
+            if not self.headers.get("Content-Type", "").startswith("application/json"):
+                self._error(415, "unsupported_media_type", "send application/json")
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 8192:
+                self._error(413, "too_large", "request too large")
+                return
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                session, username, password = str(body["session"]), str(body["username"]).strip(), str(body["password"])
+            except (ValueError, KeyError, TypeError):
+                self._error(400, "bad_request", "expected session, username and password")
+                return
+            address = self.client_address[0]
+            if not authority.sessions.exists(session):
+                self._error(410, "session_expired", "This sign-in session is no longer valid. Start signing in again.")
+                return
+            if throttle.blocked(address):
+                self._error(429, "too_many_attempts", "Too many failed attempts. Try again in a few minutes.")
+                return
+            user = authority.store.check_password(username, password)
+            if user is None:
+                throttle.fail(address)
+                log.warning("failed sign-in for %r from %s (app)", username, address)
+                self._error(401, "wrong_credentials", "Wrong user name or password.")
+                return
+            if not authority.sessions.complete(session, user):
+                self._error(410, "session_expired", "This sign-in session is no longer valid. Start signing in again.")
+                return
+            self._json(200, {"user": user.name, "displayName": user.display_name})
+
         def _admin(self, method: str) -> bool:
             """Serve an admin API request; False when the path is not part of the (enabled) API."""
             if not self.admin_api.handles(urlparse(self.path).path):
@@ -131,6 +173,9 @@ def make_handler(authority: Authority):
             url = urlparse(self.path)
             if url.path in JWKS_PATHS:
                 self._send(200, jwks_body, "application/json")
+            elif url.path == SIGN_IN_PATH:
+                # Lets an app check, before showing its form, that this service takes it.
+                self._json(200, {"passwordSignIn": True})
             elif url.path == "/health":
                 self._send(200, b"ok", "text/plain")
             elif url.path == "/login":
@@ -156,6 +201,9 @@ def make_handler(authority: Authority):
 
         def do_POST(self):
             if self._admin("POST"):
+                return
+            if urlparse(self.path).path == SIGN_IN_PATH:
+                self._sign_in()
                 return
             if urlparse(self.path).path != "/login":
                 self._send(404, b"not found", "text/plain")
