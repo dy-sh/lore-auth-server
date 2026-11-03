@@ -305,7 +305,7 @@ lore clone lore://lore.example.com:41337/my-game
 lore auth logout --auth-url https://lore.example.com:41342   # or run `lore auth logout` inside a repository
 ```
 
-GUI clients show the same login page when they need a sign-in.
+GUI clients show the same login page when they need a sign-in. Apps can also show their own user name and password form instead of the page; see [docs/app-sign-in.md](docs/app-sign-in.md).
 
 The client can hold several sign-ins for one server, and keeps using the one it already has. To switch users, sign out first, then sign in again:
 
