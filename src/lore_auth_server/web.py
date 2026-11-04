@@ -28,23 +28,28 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lore sign in</title>
 <style>
-  :root {{ color-scheme: light dark; --bg: #f4f4f5; --card: #fff; --text: #18181b; --muted: #71717a;
-          --border: #d4d4d8; --accent: #2563eb; --error: #dc2626; }}
-  @media (prefers-color-scheme: dark) {{
-    :root {{ --bg: #18181b; --card: #27272a; --text: #f4f4f5; --muted: #a1a1aa; --border: #3f3f46; }}
-  }}
-  body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg);
-         color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }}
-  main {{ width: min(360px, calc(100vw - 32px)); background: var(--card); border: 1px solid var(--border);
-         border-radius: 12px; padding: 28px; box-sizing: border-box; }}
-  h1 {{ font-size: 20px; margin: 0 0 4px; }}
-  p {{ margin: 0 0 20px; color: var(--muted); font-size: 14px; }}
-  label {{ display: block; font-size: 14px; margin: 12px 0 4px; }}
-  input {{ width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--border);
-          border-radius: 8px; background: transparent; color: inherit; font: inherit; }}
-  button {{ width: 100%; margin-top: 20px; padding: 10px; border: 0; border-radius: 8px;
-           background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }}
-  .error {{ color: var(--error); font-size: 14px; margin: 12px 0 0; }}
+  :root {{ color-scheme: dark; --frame: #3b3f47; --panel: #454a53; --recessed: #3f434b; --text: #f3f4f6;
+          --muted: #a9b0bb; --dim: #7a808b; --accent: #ebc35c; --accent-hover: #f1cd70; --ink: #25272c;
+          --bad: #fabcbc; --bad-bg: rgba(232, 117, 117, 0.13); }}
+  body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--frame);
+         color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }}
+  main {{ width: min(360px, calc(100vw - 32px)); background: var(--panel); border-radius: 11px; padding: 28px;
+         box-sizing: border-box; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05); }}
+  h1 {{ font-size: 18px; font-weight: 600; margin: 0 0 4px; }}
+  p {{ margin: 0 0 20px; color: var(--muted); font-size: 13px; }}
+  p:last-child {{ margin-bottom: 0; }}
+  strong {{ color: var(--text); }}
+  label {{ display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }}
+  input {{ width: 100%; box-sizing: border-box; height: 36px; padding: 0 12px; border: 0; border-radius: 7px;
+          background: var(--recessed); color: inherit; font: inherit; outline: none;
+          box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06), inset 0 1px 2px rgba(0, 0, 0, 0.14); }}
+  input:focus {{ box-shadow: inset 0 0 0 1.5px var(--accent); }}
+  button {{ width: 100%; height: 36px; margin-top: 22px; border: 0; border-radius: 7px; background: var(--accent);
+           color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }}
+  button:hover {{ background: var(--accent-hover); }}
+  button:focus-visible {{ outline: 2px solid var(--accent); outline-offset: 2px; }}
+  .error {{ color: var(--bad); background: var(--bad-bg); border-radius: 7px; padding: 8px 12px; font-size: 13px;
+           margin: 14px 0 0; }}
 </style></head>
 <body><main>{body}</main></body></html>"""
 
