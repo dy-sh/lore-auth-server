@@ -29,12 +29,12 @@ PAGE = """<!doctype html>
 <title>Lore sign in</title>
 <style>
   :root {{ color-scheme: dark; --frame: #3b3f47; --panel: #454a53; --recessed: #3f434b; --text: #f3f4f6;
-          --muted: #a9b0bb; --dim: #7a808b; --accent: #ebc35c; --accent-hover: #f1cd70; --ink: #25272c;
+          --muted: #a9b0bb; --accent: #ebc35c; --accent-hover: #f1cd70; --ink: #25272c;
           --bad: #fabcbc; --bad-bg: rgba(232, 117, 117, 0.13); }}
   body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--frame);
          color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }}
   main {{ width: min(360px, calc(100vw - 32px)); background: var(--panel); border-radius: 11px; padding: 28px;
-         box-sizing: border-box; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05); }}
+         box-sizing: border-box; }}
   h1 {{ font-size: 18px; font-weight: 600; margin: 0 0 4px; }}
   p {{ margin: 0 0 20px; color: var(--muted); font-size: 13px; }}
   p:last-child {{ margin-bottom: 0; }}
