@@ -31,7 +31,11 @@ PAGE = """<!doctype html>
   :root {{ color-scheme: dark; --frame: #3b3f47; --panel: #454a53; --recessed: #3f434b; --text: #f3f4f6;
           --muted: #a9b0bb; --accent: #ebc35c; --accent-hover: #f1cd70; --ink: #25272c;
           --bad: #fabcbc; --bad-bg: rgba(232, 117, 117, 0.13); }}
-  body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--frame);
+  html {{ height: 100%; }}
+  /* Centred in the window whatever the browser takes 100vh for (embedded
+     browsers and toolbars that come and go measure it differently). */
+  body {{ margin: 0; min-height: 100%; box-sizing: border-box; padding: 16px 0; display: flex;
+         align-items: center; justify-content: center; background: var(--frame);
          color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }}
   main {{ width: min(360px, calc(100vw - 32px)); background: var(--panel); border-radius: 11px; padding: 28px;
          box-sizing: border-box; }}
