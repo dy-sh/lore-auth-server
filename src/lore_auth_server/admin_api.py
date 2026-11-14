@@ -76,14 +76,14 @@ def _route(method: str, path: str, handler: str, **options) -> _Route:
 
 ROUTES = [
     _route("GET", "me", "get_me", admin=False),
-    _route("GET", "users", "list_users"),
+    _route("GET", "users", "list_users", admin=False),
     _route("POST", "users", "create_user", body=True),
     _route("PATCH", "users/{}", "update_user", body=True),
     _route("DELETE", "users/{}", "delete_user"),
     _route("PUT", "users/{}/password", "set_password", body=True),
-    _route("GET", "grants", "list_grants", query={"user", "repository"}),
-    _route("PUT", "grants", "put_grant", body=True),
-    _route("DELETE", "grants", "delete_grant", body=True),
+    _route("GET", "grants", "list_grants", query={"user", "repository"}, admin=False),
+    _route("PUT", "grants", "put_grant", body=True, admin=False),
+    _route("DELETE", "grants", "delete_grant", body=True, admin=False),
     _route("GET", "repositories", "list_repositories"),
     _route("GET", "api-keys", "list_api_keys", query={"user"}),
     _route("POST", "api-keys", "create_api_key", body=True),
@@ -313,6 +313,14 @@ class AdminApi:
     def _grant_json(self, user: str, resource_id: str, names: dict[str, str]) -> dict:
         return {"user": user, "repository": _repository_id(resource_id), "repositoryName": names.get(resource_id)}
 
+    def _require_own(self, call: _Call, resource_id: str) -> None:
+        """A user who isn't an administrator may share only a repository they created."""
+        if call.user.is_admin:
+            return
+        repository = self.store.get_repository(resource_id) if resource_id != ALL_REPOSITORIES else None
+        if repository is None or repository.creator != call.user.name:
+            raise ApiError(403, "forbidden", "only an administrator or the repository's creator can do this")
+
     def _repository_names(self) -> dict[str, str]:
         return {r.resource_id: r.name for r in self.store.list_repositories()}
 
@@ -323,7 +331,11 @@ class AdminApi:
         return Response(200, {"name": user.name, "displayName": user.display_name, "admin": user.is_admin})
 
     def list_users(self, call: _Call) -> Response:
-        return Response(200, {"users": [_user_json(u) for u in self.store.list_users()]})
+        users = self.store.list_users()
+        # Everyone may see whom they can share a repository with; disabled accounts only administrators.
+        if not call.user.is_admin:
+            users = [u for u in users if not u.disabled]
+        return Response(200, {"users": [_user_json(u) for u in users]})
 
     def create_user(self, call: _Call) -> Response:
         body = _fields(call.body, {"name": str, "password": str}, {"displayName": str, "admin": bool})
@@ -375,6 +387,13 @@ class AdminApi:
         repository = call.query.get("repository")
         resource_id = self.store.resolve_repository(repository) if repository is not None else None
         names = self._repository_names()
+        if not call.user.is_admin:
+            # The creator sees who has their repository: its grants and the grants of every repository.
+            if resource_id is None:
+                raise ApiError(403, "forbidden", "administrator rights required to list every grant")
+            self._require_own(call, resource_id)
+            pairs = self.store.list_grants(user, resource_id) + self.store.list_grants(user, ALL_REPOSITORIES)
+            return Response(200, {"grants": [self._grant_json(u, rid, names) for u, rid in pairs]})
         grants = [self._grant_json(u, rid, names) for u, rid in self.store.list_grants(user, resource_id)]
         return Response(200, {"grants": grants})
 
@@ -382,7 +401,10 @@ class AdminApi:
         body = _fields(call.body, {"user": str, "repository": str})
         user = _not_empty(body["user"], "user")
         resource_id = self.store.resolve_repository(_not_empty(body["repository"], "repository"))
+        self._require_own(call, resource_id)
         self._require_user(user)
+        if not call.user.is_admin and self.store.get_user(user).disabled:
+            raise NotFoundError(f"no such user: {user}")
         return user, resource_id
 
     def put_grant(self, call: _Call) -> Response:

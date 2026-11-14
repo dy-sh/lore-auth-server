@@ -107,7 +107,7 @@ This is the `user_token` from `UrcAuthApi` (`GetAuthSession`, `ExchangeAPIKeyFor
 |---|---|---|---|
 | `401` | `unauthenticated` | No token, a malformed, forged, foreign or expired token, a repository access token, or a user that no longer exists. The response has a `WWW-Authenticate: Bearer` header. | Ask the user to sign in again. |
 | `403` | `user_disabled` | The account is disabled. | Tell the user; signing in again won't help. |
-| `403` | `forbidden` | The user isn't an administrator. Every endpoint except `GET /me` and `GET /servers` requires administrator rights. | Hide the administration features. |
+| `403` | `forbidden` | The user isn't an administrator. Every endpoint requires administrator rights, except `GET /me`, `GET /servers`, `GET /users` and sharing a repository the user created (see [Sharing your own repository](#sharing-your-own-repository)). | Hide the administration features. |
 | `429` | `too_many_requests` | Too many failed attempts from this address. The `Retry-After` header gives the wait in seconds. | Wait, then retry. |
 
 The server checks the user's current state on every request. Revoked administrator rights, a disabled account or a deleted user take effect at once, even for tokens issued earlier.
@@ -172,6 +172,8 @@ A user object:
 `disabled` users can't sign in, exchange tokens or use this API. Their grants and API keys are kept.
 
 #### GET /users
+
+Available to every user, so that anyone can pick whom to share a repository with. A user who isn't an administrator doesn't see disabled accounts.
 
 ```http
 GET /api/v1/users
@@ -287,6 +289,15 @@ A grant gives one user access to one repository, or to every repository with `*`
 | `repositoryName` | string or `null` | The repository's name if the server knows it; `null` for `*` and for unknown repositories. |
 
 Grants are only the explicit ones. Access the server gives in other ways, for example to administrators or to the user who created a repository, isn't listed.
+
+#### Sharing your own repository
+
+A user who isn't an administrator may manage access to a repository they created, and to no other:
+
+- `GET /grants` with `repository` set to that repository returns its grants and the `*` grants, so the creator sees everyone who can use it. Without `repository`, or for another repository, it's `403 forbidden`.
+- `PUT /grants` and `DELETE /grants` for that repository. `*` and other repositories are `403 forbidden`, a disabled user as the target is `404 not_found`, as if there were no such user.
+
+Creating users stays with administrators: the creator shares with people who already have an account.
 
 #### GET /grants
 

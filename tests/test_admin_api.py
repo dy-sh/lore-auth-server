@@ -202,18 +202,19 @@ class AdminApiTest(unittest.TestCase):
         self.assertError(self.call("GET", "/api/v1/me", expired), 401, "unauthenticated")
         self.assertEqual(self.call("GET", "/api/v1/me", self.root)[0], 200)
 
-    def test_non_admin_is_forbidden_except_me(self):
+    def test_non_admin_is_forbidden_except_sharing_own(self):
         status, body, _ = self.call("GET", "/api/v1/me", self.alice)
         self.assertEqual((status, body), (200, {"name": "alice", "displayName": "alice", "admin": False}))
         requests = [
-            ("GET", "/api/v1/users", None),
             ("POST", "/api/v1/users", {"name": "eve", "password": "eve-password", "admin": True}),
             ("PATCH", "/api/v1/users/alice", {"admin": True}),
             ("PUT", "/api/v1/users/root/password", {"password": "taken-over"}),
             ("DELETE", "/api/v1/users/root", None),
             ("GET", "/api/v1/grants", None),
             ("PUT", "/api/v1/grants", {"user": "alice", "repository": "*"}),
-            ("DELETE", "/api/v1/grants", {"user": "alice", "repository": "game"}),
+            ("PUT", "/api/v1/grants", {"user": "alice", "repository": "secret"}),
+            ("DELETE", "/api/v1/grants", {"user": "bob", "repository": "secret"}),
+            ("GET", "/api/v1/grants?repository=secret", None),
             ("GET", "/api/v1/repositories", None),
             ("GET", "/api/v1/api-keys", None),
             ("POST", "/api/v1/api-keys", {"user": "root"}),
@@ -226,6 +227,24 @@ class AdminApiTest(unittest.TestCase):
         self.assertFalse(self.store.get_user("alice").is_admin)
         self.assertEqual(self.store.grants_of("alice"), [REPO_A])
         self.assertIsNotNone(self.store.check_password("root", "root-password"))
+
+    def test_creator_shares_own_repository(self):
+        self.store.add_user("carol", "carol-password")
+        self.store.set_disabled("carol", True)
+        self.store.grant("bob", "urc-*")
+        status, body, _ = self.call("GET", "/api/v1/users", self.alice)
+        self.assertEqual(status, 200)
+        self.assertEqual([u["name"] for u in body["users"]], ["alice", "bob", "root"])
+        self.assertEqual(self.call("PUT", "/api/v1/grants", self.alice, {"user": "root", "repository": "game"})[0], 200)
+        status, body, _ = self.call("GET", "/api/v1/grants?repository=game", self.alice)
+        self.assertEqual(status, 200)
+        self.assertEqual(sorted((g["user"], g["repository"]) for g in body["grants"]), [("alice", REPO_A[4:]), ("bob", "*"), ("root", REPO_A[4:])])
+        self.assertEqual(self.call("DELETE", "/api/v1/grants", self.alice, {"user": "root", "repository": "game"})[0], 204)
+        self.assertNotIn(REPO_A, self.store.grants_of("root"))
+        self.assertError(self.call("PUT", "/api/v1/grants", self.alice, {"user": "carol", "repository": "game"}), 404, "not_found")
+        self.assertError(self.call("GET", "/api/v1/grants", self.alice), 403, "forbidden")
+        bob = self.token("bob")
+        self.assertError(self.call("PUT", "/api/v1/grants", bob, {"user": "bob", "repository": "game"}), 403, "forbidden")
 
     def test_disabled_user_is_refused(self):
         self.store.add_user("dave", "dave-password", is_admin=True)
