@@ -215,6 +215,7 @@ class AdminApiTest(unittest.TestCase):
             ("PUT", "/api/v1/grants", {"user": "alice", "repository": "secret"}),
             ("DELETE", "/api/v1/grants", {"user": "bob", "repository": "secret"}),
             ("GET", "/api/v1/grants?repository=secret", None),
+            ("GET", "/api/v1/grants?repository=*", None),
             ("GET", "/api/v1/repositories", None),
             ("GET", "/api/v1/api-keys", None),
             ("POST", "/api/v1/api-keys", {"user": "root"}),
@@ -245,6 +246,10 @@ class AdminApiTest(unittest.TestCase):
         self.assertError(self.call("GET", "/api/v1/grants", self.alice), 403, "forbidden")
         bob = self.token("bob")
         self.assertError(self.call("PUT", "/api/v1/grants", bob, {"user": "bob", "repository": "game"}), 403, "forbidden")
+        # bob can use every repository, so he sees who has "game", but changes nothing.
+        self.assertEqual(self.call("GET", "/api/v1/grants?repository=game", bob)[0], 200)
+        self.store.add_user("dora", "dora-password")
+        self.assertError(self.call("GET", "/api/v1/grants?repository=game", self.token("dora")), 403, "forbidden")
 
     def test_disabled_user_is_refused(self):
         self.store.add_user("dave", "dave-password", is_admin=True)

@@ -292,9 +292,9 @@ Grants are only the explicit ones. Access the server gives in other ways, for ex
 
 #### Sharing your own repository
 
-A user who isn't an administrator may manage access to a repository they created, and to no other:
+A user who isn't an administrator may see who has a repository they can use, and manage access to a repository they created, and to no other:
 
-- `GET /grants` with `repository` set to that repository returns its grants and the `*` grants, so the creator sees everyone who can use it. Without `repository`, or for another repository, it's `403 forbidden`.
+- `GET /grants` with `repository` set to a repository the user can use (they created it, or have a grant to it or to `*`) returns its grants and the `*` grants, so everyone in a repository sees who else is in it. Without `repository`, or for a repository the user can't use, it's `403 forbidden`.
 - `PUT /grants` and `DELETE /grants` for that repository. `*` and other repositories are `403 forbidden`, a disabled user as the target is `404 not_found`, as if there were no such user.
 
 Creating users stays with administrators: the creator shares with people who already have an account.

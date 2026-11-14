@@ -321,6 +321,15 @@ class AdminApi:
         if repository is None or repository.creator != call.user.name:
             raise ApiError(403, "forbidden", "only an administrator or the repository's creator can do this")
 
+    def _require_access(self, call: _Call, resource_id: str) -> None:
+        """Anyone who can use a repository may see who else can: its creator, and users with a grant to it or to every repository."""
+        if call.user.is_admin:
+            return
+        repository = self.store.get_repository(resource_id) if resource_id != ALL_REPOSITORIES else None
+        mine = self.store.grants_of(call.user.name)
+        if repository is None or (repository.creator != call.user.name and resource_id not in mine and ALL_REPOSITORIES not in mine):
+            raise ApiError(403, "forbidden", "you have no access to this repository")
+
     def _repository_names(self) -> dict[str, str]:
         return {r.resource_id: r.name for r in self.store.list_repositories()}
 
@@ -388,10 +397,10 @@ class AdminApi:
         resource_id = self.store.resolve_repository(repository) if repository is not None else None
         names = self._repository_names()
         if not call.user.is_admin:
-            # The creator sees who has their repository: its grants and the grants of every repository.
+            # Who has the repository: its grants and the grants of every repository, for anyone who has it too.
             if resource_id is None:
                 raise ApiError(403, "forbidden", "administrator rights required to list every grant")
-            self._require_own(call, resource_id)
+            self._require_access(call, resource_id)
             pairs = self.store.list_grants(user, resource_id) + self.store.list_grants(user, ALL_REPOSITORIES)
             return Response(200, {"grants": [self._grant_json(u, rid, names) for u, rid in pairs]})
         grants = [self._grant_json(u, rid, names) for u, rid in self.store.list_grants(user, resource_id)]
