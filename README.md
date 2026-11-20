@@ -46,7 +46,7 @@ The service signs tokens with its own RSA key and writes the public key to `jwks
 | | |
 |---|---|
 | [Installing on Linux](docs/install-linux.md) | From an open Lore server to one that requires sign-in, step by step |
-| [Running on Windows](docs/install-windows.md) | What is checked on Windows and how it differs |
+| [Installing on Windows](docs/install-windows.md) | The same on Windows: Python, win-acme, a Task Scheduler task |
 | [Users and access](docs/users-and-access.md) | Users, grants, API keys, access rules, signing in as a Lore user |
 | [Configuration and security](docs/configuration.md) | Settings and what to keep private |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and their fixes |
