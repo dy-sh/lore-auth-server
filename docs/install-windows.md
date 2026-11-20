@@ -9,7 +9,7 @@ Not checked on Windows yet: a TLS certificate for remote clients and starting th
 In PowerShell:
 
 ```powershell
-py -3 -m venv C:\lore-auth-serverenv
+py -3 -m venv C:\lore-auth-server\venv
 C:\lore-auth-server\venv\Scripts\pip install git+https://github.com/dy-sh/lore-auth-server.git
 ```
 
