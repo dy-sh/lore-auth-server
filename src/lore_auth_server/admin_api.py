@@ -342,9 +342,27 @@ class AdminApi:
     def list_users(self, call: _Call) -> Response:
         users = self.store.list_users()
         # Everyone may see whom they can share a repository with; disabled accounts only administrators.
+        # Administrators can use every repository without working in it: others see one only
+        # where it is a person of a repository they share (its creator or holding a grant to it).
         if not call.user.is_admin:
-            users = [u for u in users if not u.disabled]
+            seen = self._people_around(call.user.name)
+            users = [u for u in users if not u.disabled and (not u.is_admin or u.name in seen)]
         return Response(200, {"users": [_user_json(u) for u in users]})
+
+    def _people_around(self, name: str) -> set[str]:
+        """The creators and grant holders of the repositories `name` can use."""
+        mine = set(self.store.grants_of(name))
+        everything = ALL_REPOSITORIES in mine
+        people: set[str] = set()
+        for repository in self.store.list_repositories():
+            rid = repository.resource_id
+            if not (everything or rid in mine or repository.creator == name):
+                continue
+            if repository.creator:
+                people.add(repository.creator)
+            people.update(user for user, _ in self.store.list_grants(None, rid))
+        people.update(user for user, _ in self.store.list_grants(None, ALL_REPOSITORIES))
+        return people
 
     def create_user(self, call: _Call) -> Response:
         body = _fields(call.body, {"name": str, "password": str}, {"displayName": str, "admin": bool})

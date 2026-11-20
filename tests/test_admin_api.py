@@ -235,8 +235,11 @@ class AdminApiTest(unittest.TestCase):
         self.store.grant("bob", "urc-*")
         status, body, _ = self.call("GET", "/api/v1/users", self.alice)
         self.assertEqual(status, 200)
-        self.assertEqual([u["name"] for u in body["users"]], ["alice", "bob", "root"])
+        # An administrator is not among the people of a repository unless they work in it.
+        self.assertEqual([u["name"] for u in body["users"]], ["alice", "bob"])
         self.assertEqual(self.call("PUT", "/api/v1/grants", self.alice, {"user": "root", "repository": "game"})[0], 200)
+        status, body, _ = self.call("GET", "/api/v1/users", self.alice)
+        self.assertEqual([u["name"] for u in body["users"]], ["alice", "bob", "root"])
         status, body, _ = self.call("GET", "/api/v1/grants?repository=game", self.alice)
         self.assertEqual(status, 200)
         self.assertEqual(sorted((g["user"], g["repository"]) for g in body["grants"]), [("alice", REPO_A[4:]), ("bob", "*"), ("root", REPO_A[4:])])
@@ -250,6 +253,19 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(self.call("GET", "/api/v1/grants?repository=game", bob)[0], 200)
         self.store.add_user("dora", "dora-password")
         self.assertError(self.call("GET", "/api/v1/grants?repository=game", self.token("dora")), 403, "forbidden")
+
+    def test_administrators_are_seen_only_where_they_work(self):
+        self.store.add_user("ada", "ada-password", is_admin=True)
+        self.store.add_repository("urc-" + "c" * 32, "tools", creator="ada")
+        status, body, _ = self.call("GET", "/api/v1/users", self.alice)
+        self.assertEqual([u["name"] for u in body["users"]], ["alice", "bob"])
+        # An administrator sees every other administrator.
+        status, body, _ = self.call("GET", "/api/v1/users", self.root)
+        self.assertEqual([u["name"] for u in body["users"]], ["ada", "alice", "bob", "root"])
+        # Sharing a repository with ada makes her one of its people for alice.
+        self.store.grant("alice", "urc-" + "c" * 32)
+        status, body, _ = self.call("GET", "/api/v1/users", self.alice)
+        self.assertEqual([u["name"] for u in body["users"]], ["ada", "alice", "bob"])
 
     def test_disabled_user_is_refused(self):
         self.store.add_user("dave", "dave-password", is_admin=True)

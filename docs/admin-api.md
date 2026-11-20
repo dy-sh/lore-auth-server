@@ -173,7 +173,7 @@ A user object:
 
 #### GET /users
 
-Available to every user, so that anyone can pick whom to share a repository with. A user who isn't an administrator doesn't see disabled accounts.
+Available to every user, so that anyone can pick whom to share a repository with. A user who isn't an administrator doesn't see disabled accounts, nor administrators, except those who work in a repository the user can use: its creator or someone with a grant to it. Administrators see everyone.
 
 ```http
 GET /api/v1/users
