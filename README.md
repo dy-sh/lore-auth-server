@@ -216,11 +216,10 @@ Start loreserver and check the log:
 ```bash
 sudo systemctl start loreserver
 curl -i http://127.0.0.1:41339/health_check        # HTTP/1.1 200 OK
-sudo journalctl -u loreserver -n 80 --no-pager -o cat | grep -o "Repository authorizer: [A-Za-z]*"
-# Repository authorizer: AuthClientAuthorizer
+lore repository list lore://lore.example.com:41337 # [Error] Not authenticated
 ```
 
-`AllowAllRepositoryAuthorizer` means the auth configuration was not picked up, and the server is still open.
+If the list shows repositories without a sign-in, the auth configuration was not picked up and the server is still open. Up to Lore 0.13 the log also says so: `Repository authorizer: AllowAllRepositoryAuthorizer` instead of `AuthClientAuthorizer`; Lore 0.14 no longer logs that line.
 
 ### 8. Open the ports
 
@@ -361,7 +360,7 @@ Without `tls_cert`/`tls_key` both listeners serve plain text. Use that only for 
 | Symptom | Cause and fix |
 |---|---|
 | `Disconnected from server … failed to get environment config` | loreserver has `[server.grpc.certificate]`. Remove it and keep the certificate only under `[server.quic.certificate]` |
-| `Repository authorizer: AllowAllRepositoryAuthorizer` in the loreserver log | `[server.auth]` is missing from the loaded config. Check the file in the `--config` directory |
+| Repositories are listed without a sign-in (or, up to Lore 0.13, `Repository authorizer: AllowAllRepositoryAuthorizer` in the loreserver log) | `[server.auth]` is missing from the loaded config. Check the file in the `--config` directory |
 | loreserver can't reach the auth service, or sign-in hangs after the password | `lore.example.com` doesn't resolve to a reachable address from the loreserver machine. Add it to `/etc/hosts` |
 | Certificate errors on clients | The client connects by IP or by another name, or the certificate expired. Use the name from `tokens.audience`, and check `openssl x509 -in /etc/lore-auth-server/tls/fullchain.pem -noout -enddate` |
 | A user still sees repositories after `revoke` | Access tokens already issued remain valid until they expire (`access_token_ttl_minutes`) |
