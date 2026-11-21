@@ -192,6 +192,53 @@ class FlowTest(unittest.TestCase):
         with self.assertRaises(grpc.RpcError):
             self.auth.ExchangeAPIKeyForUserToken(pb.ExchangeAPIKeyForUserTokenRequest(api_key="lak_wrong"))
 
+    def test_access_levels_and_pushes_to_protected_branches(self):
+        authority = Authority(self.config, self.store, TokenIssuer(self.config))
+        self.store.add_user("reader", "reader-password")
+        self.store.add_user("lead", "lead-password")
+        self.store.grant("reader", REPO_A, "read")
+        self.assertEqual(authority.permissions(self.store.get_user("reader"), REPO_A), ["read"])
+        self.assertIsNone(authority.permissions(self.store.get_user("reader"), REPO_B))
+        # A grant to every repository and one to this repository add up.
+        self.store.grant("reader", "urc-*", "write")
+        self.assertEqual(authority.permissions(self.store.get_user("reader"), REPO_A), ["read", "write"])
+        self.store.revoke("reader", "urc-*")
+        self.store.grant("lead", REPO_A, "write", push_protected=True)
+        self.assertEqual(authority.permissions(self.store.get_user("lead"), REPO_A), ["read", "write", "push-protected"])
+        # Pushing to protected branches needs write access: a read grant drops it.
+        self.store.grant("lead", REPO_A, "read", push_protected=True)
+        self.assertEqual(authority.permissions(self.store.get_user("lead"), REPO_A), ["read"])
+        self.assertIn("push-protected", authority.permissions(self.store.get_user("root"), REPO_A))
+        with self.assertRaises(ValueError):
+            self.store.grant("lead", REPO_A, "everything")
+        token = self.browser_login("reader", "reader-password")
+        exchanged = self.auth.ExchangeUserTokenForMultiresourceToken(
+            pb.ExchangeUserTokenForMultiresourceTokenRequest(resource_id=[REPO_A]), metadata=bearer(token.user_token)
+        )
+        claims = json.loads(base64.urlsafe_b64decode(exchanged.token.user_token.split(".")[1] + "=="))
+        self.assertEqual(claims["resources"], [{"resource_id": REPO_A, "permission": ["read"]}])
+
+    def test_grants_made_before_access_levels_stay_write(self):
+        import sqlite3
+
+        path = Path(self.tmp.name) / "old.db"
+        db = sqlite3.connect(path)
+        db.executescript(
+            "CREATE TABLE users (name TEXT PRIMARY KEY, display_name TEXT NOT NULL, password_hash TEXT NOT NULL, "
+            "is_admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);"
+            "CREATE TABLE grants (user_name TEXT NOT NULL, resource_id TEXT NOT NULL, PRIMARY KEY (user_name, resource_id));"
+            "INSERT INTO users VALUES ('old', 'old', 'x', 0, 0, 0);"
+            f"INSERT INTO grants VALUES ('old', '{REPO_A}');"
+        )
+        db.commit()
+        db.close()
+        store = Store(path)
+        try:
+            [grant] = store.grant_details("old")
+            self.assertEqual((grant.access, grant.push_protected), ("write", False))
+        finally:
+            store.close()
+
     def test_jwks_is_served(self):
         with urllib.request.urlopen(f"{self.config.public_web_url}/jwks.json") as r:
             self.assertEqual(json.load(r)["keys"][0]["alg"], "RS256")

@@ -66,7 +66,7 @@ The API is **on by default**. To turn it off, set `admin_api = false` under `[se
 
 ```bash
 curl -s https://lore.example.com:41343/.well-known/lore-admin
-# {"protocol": "lore-admin", "version": 1, "base": "/api/v1", "features": ["users", "grants", "repositories", "api-keys"]}
+# {"protocol": "lore-admin", "version": 1, "base": "/api/v1", "features": ["users", "grants", "grant-access", "repositories", "api-keys", "servers"]}
 ```
 
 ## Limitations

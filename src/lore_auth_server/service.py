@@ -15,15 +15,17 @@ from .proto import auth_api_pb2 as pb
 from .proto import auth_api_pb2_grpc as pb_grpc
 from .proto import rebac_api_pb2 as rebac_pb
 from .proto import rebac_api_pb2_grpc as rebac_grpc
-from .store import ALL_REPOSITORIES, Store, User
+from .store import ALL_REPOSITORIES, WRITE, Store, User
 from .tokens import TokenError, TokenIssuer
 
 log = logging.getLogger(__name__)
 
-# Actions understood by loreserver. Being listed for a repository at all grants
-# clone/pull/push; the named actions unlock privileged operations.
+# Actions understood by loreserver. Any of them lets a user read the repository;
+# `write` is needed to push, create branches, lock files and set metadata;
+# `push-protected` to push to a protected branch; the rest unlock privileged operations.
+READ_ACTIONS = ["read"]
 USER_ACTIONS = ["read", "write"]
-ADMIN_ACTIONS = ["read", "write", "admin", "owner", "migrate", "obliterate"]
+ADMIN_ACTIONS = ["read", "write", "push-protected", "admin", "owner", "migrate", "obliterate"]
 
 
 @dataclass
@@ -97,14 +99,21 @@ class Authority:
             return None
         if user.is_admin:
             return list(ADMIN_ACTIONS)
-        grants = self.store.grants_of(user.name)
-        if ALL_REPOSITORIES in grants or resource_id in grants:
-            return list(USER_ACTIONS)
+        # A grant to the repository and one to every repository add up: the wider access wins.
+        grants = [g for g in self.store.grant_details(user.name) if g.resource_id in (ALL_REPOSITORIES, resource_id)]
+        creator = False
         if resource_id != ALL_REPOSITORIES:
             repository = self.store.get_repository(resource_id)
-            if repository and repository.creator == user.name:
-                return list(USER_ACTIONS)
-        return None
+            creator = repository is not None and repository.creator == user.name
+        if not grants and not creator:
+            return None
+        # The creator of a repository always writes to it.
+        writes = creator or any(g.access == WRITE for g in grants)
+        if not writes:
+            return list(READ_ACTIONS)
+        if any(g.push_protected for g in grants if g.access == WRITE):
+            return [*USER_ACTIONS, "push-protected"]
+        return list(USER_ACTIONS)
 
     def visible_repositories(self, user: User) -> list[str]:
         known = [r.resource_id for r in self.store.list_repositories()]

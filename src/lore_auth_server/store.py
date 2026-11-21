@@ -44,8 +44,10 @@ CREATE TABLE IF NOT EXISTS repositories (
     created_at  INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS grants (
-    user_name   TEXT NOT NULL REFERENCES users(name) ON DELETE CASCADE,
-    resource_id TEXT NOT NULL,
+    user_name      TEXT NOT NULL REFERENCES users(name) ON DELETE CASCADE,
+    resource_id    TEXT NOT NULL,
+    access         TEXT NOT NULL DEFAULT 'write',
+    push_protected INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_name, resource_id)
 );
 CREATE TABLE IF NOT EXISTS servers (
@@ -108,6 +110,20 @@ def resource_for(repository: str) -> str:
     return f"urc-{repository}"
 
 
+# Access levels of a grant: reading (clone, get changes) or writing as well.
+READ = "read"
+WRITE = "write"
+ACCESS_LEVELS = (READ, WRITE)
+
+
+@dataclass
+class Grant:
+    user: str
+    resource_id: str
+    access: str
+    push_protected: bool
+
+
 @dataclass
 class User:
     name: str
@@ -157,6 +173,12 @@ class Store:
             self._db.execute("PRAGMA foreign_keys = ON")
             self._db.execute("PRAGMA journal_mode = WAL")
             self._db.executescript(SCHEMA)
+            # Grants made before access levels existed are write access, as they were.
+            columns = {r[1] for r in self._db.execute("PRAGMA table_info(grants)").fetchall()}
+            if "access" not in columns:
+                self._db.execute("ALTER TABLE grants ADD COLUMN access TEXT NOT NULL DEFAULT 'write'")
+            if "push_protected" not in columns:
+                self._db.execute("ALTER TABLE grants ADD COLUMN push_protected INTEGER NOT NULL DEFAULT 0")
 
     def close(self) -> None:
         with self._lock:
@@ -277,10 +299,20 @@ class Store:
 
     # Grants
 
-    def grant(self, user: str, resource_id: str) -> None:
+    def grant(self, user: str, resource_id: str, access: str = WRITE, push_protected: bool = False) -> None:
+        """Gives `user` access to `resource_id`, or changes the access they have: `read` (clone and get
+        changes) or `write` (also push, branches, locks); `push_protected` lets a writer push to
+        protected branches."""
+        if access not in ACCESS_LEVELS:
+            raise ValueError(f"access must be one of {', '.join(ACCESS_LEVELS)}")
         if not self.get_user(user):
             raise NotFoundError(f"no such user: {user}")
-        self._execute("INSERT OR IGNORE INTO grants (user_name, resource_id) VALUES (?, ?)", (user, resource_id))
+        self._execute(
+            "INSERT INTO grants (user_name, resource_id, access, push_protected) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (user_name, resource_id) DO UPDATE SET access = excluded.access, "
+            "push_protected = excluded.push_protected",
+            (user, resource_id, access, int(push_protected and access == WRITE)),
+        )
 
     def revoke(self, user: str, resource_id: str) -> None:
         self._execute("DELETE FROM grants WHERE user_name = ? AND resource_id = ?", (user, resource_id))
@@ -288,6 +320,15 @@ class Store:
     def grants_of(self, user: str) -> list[str]:
         rows = self._query("SELECT resource_id FROM grants WHERE user_name = ? ORDER BY resource_id", (user,))
         return [r["resource_id"] for r in rows]
+
+    def grant_details(self, user: str | None = None, resource_id: str | None = None) -> list[Grant]:
+        """Grants with their access, optionally limited to one user and/or one exact resource ID."""
+        rows = self._query(
+            "SELECT user_name, resource_id, access, push_protected FROM grants WHERE (?1 IS NULL OR user_name = ?1) "
+            "AND (?2 IS NULL OR resource_id = ?2) ORDER BY user_name, resource_id",
+            (user, resource_id),
+        )
+        return [Grant(r["user_name"], r["resource_id"], r["access"], bool(r["push_protected"])) for r in rows]
 
     def list_grants(self, user: str | None = None, resource_id: str | None = None) -> list[tuple[str, str]]:
         """(user, resource ID) pairs, optionally limited to one user and/or one exact resource ID."""

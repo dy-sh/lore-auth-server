@@ -115,9 +115,11 @@ def build_parser() -> argparse.ArgumentParser:
         user.add_parser(name, help=help_text).add_argument("name")
     user.add_parser("list", help="list users and their grants")
 
-    grant = sub.add_parser("grant", help="give a user access to a repository")
+    grant = sub.add_parser("grant", help="give a user access to a repository, or change it")
     grant.add_argument("user")
     grant.add_argument("repository", help="repository name, 32-character ID, or * for all repositories")
+    grant.add_argument("--read-only", action="store_true", help="clone and get changes only: no push, branches or locks")
+    grant.add_argument("--push-protected", action="store_true", help="may also push to protected branches")
     revoke = sub.add_parser("revoke", help="take access away")
     revoke.add_argument("user")
     revoke.add_argument("repository")
@@ -186,11 +188,20 @@ def _admin_command(args, store: Store) -> None:
             names = {r.resource_id: r.name for r in store.list_repositories()}
             for u in store.list_users():
                 flags = ", ".join(f for f, on in (("admin", u.is_admin), ("disabled", u.disabled)) if on)
-                grants = [("all" if g == "urc-*" else names.get(g, g)) for g in store.grants_of(u.name)]
+                grants = [
+                    ("all" if g.resource_id == "urc-*" else names.get(g.resource_id, g.resource_id))
+                    + (" (read)" if g.access == "read" else " (+protected)" if g.push_protected else "")
+                    for g in store.grant_details(u.name)
+                ]
                 print(f"{u.name:<20} {flags:<16} {', '.join(grants) or '-'}")
     elif args.cmd in ("grant", "revoke"):
         resource = store.resolve_repository(args.repository)
-        (store.grant if args.cmd == "grant" else store.revoke)(args.user, resource)
+        if args.cmd == "grant":
+            if args.read_only and args.push_protected:
+                raise SystemExit("--push-protected needs write access: drop --read-only")
+            store.grant(args.user, resource, "read" if args.read_only else "write", args.push_protected)
+        else:
+            store.revoke(args.user, resource)
         print("done")
     elif args.cmd == "repo":
         if args.action == "list":

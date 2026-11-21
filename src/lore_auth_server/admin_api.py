@@ -26,7 +26,7 @@ PROTOCOL = "lore-admin"
 VERSION = 1
 DISCOVERY_PATH = "/.well-known/lore-admin"
 BASE = "/api/v1"
-FEATURES = ["users", "grants", "repositories", "api-keys", "servers"]
+FEATURES = ["users", "grants", "grant-access", "repositories", "api-keys", "servers"]
 MAX_BODY_BYTES = 8192
 _DRAIN_LIMIT_BYTES = 1 << 20
 MAX_TEXT_LENGTH = 128  # display names and API key labels
@@ -311,7 +311,15 @@ class AdminApi:
         return user
 
     def _grant_json(self, user: str, resource_id: str, names: dict[str, str]) -> dict:
-        return {"user": user, "repository": _repository_id(resource_id), "repositoryName": names.get(resource_id)}
+        found = self.store.grant_details(user, resource_id)
+        access, push_protected = (found[0].access, found[0].push_protected) if found else ("write", False)
+        return {
+            "user": user,
+            "repository": _repository_id(resource_id),
+            "repositoryName": names.get(resource_id),
+            "access": access,
+            "pushProtected": push_protected,
+        }
 
     def _require_own(self, call: _Call, resource_id: str) -> None:
         """A user who isn't an administrator may share only a repository they created."""
@@ -424,8 +432,8 @@ class AdminApi:
         grants = [self._grant_json(u, rid, names) for u, rid in self.store.list_grants(user, resource_id)]
         return Response(200, {"grants": grants})
 
-    def _grant_target(self, call: _Call) -> tuple[str, str]:
-        body = _fields(call.body, {"user": str, "repository": str})
+    def _grant_target(self, call: _Call, optional: dict[str, type] | None = None) -> tuple[str, str]:
+        body = _fields(call.body, {"user": str, "repository": str}, optional)
         user = _not_empty(body["user"], "user")
         resource_id = self.store.resolve_repository(_not_empty(body["repository"], "repository"))
         self._require_own(call, resource_id)
@@ -435,9 +443,16 @@ class AdminApi:
         return user, resource_id
 
     def put_grant(self, call: _Call) -> Response:
-        user, resource_id = self._grant_target(call)
-        self.store.grant(user, resource_id)
-        self._audit(call, "granted %s access to %s", user, _repository_id(resource_id))
+        user, resource_id = self._grant_target(call, {"access": str, "pushProtected": bool})
+        access = call.body.get("access", "write")
+        push_protected = call.body.get("pushProtected", False)
+        if access not in ("read", "write"):
+            raise _bad_request("access must be \"read\" or \"write\"")
+        if push_protected and access == "read":
+            raise _bad_request("pushProtected needs write access")
+        self.store.grant(user, resource_id, access, push_protected)
+        self._audit(call, "granted %s %s access to %s%s", user, access, _repository_id(resource_id),
+                    " with pushes to protected branches" if push_protected else "")
         return Response(200, self._grant_json(user, resource_id, self._repository_names()))
 
     def delete_grant(self, call: _Call) -> Response:

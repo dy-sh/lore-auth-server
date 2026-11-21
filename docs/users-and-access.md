@@ -14,6 +14,8 @@ lore-auth user list
 lore-auth grant alice my-game               # by repository name
 lore-auth grant alice 0198f3c2a1b47c55a0e2d4f6b8c9e012   # by ID
 lore-auth grant alice '*'                   # every repository, including future ones
+lore-auth grant bob my-game --read-only     # clone and get changes, nothing else
+lore-auth grant lead my-game --push-protected   # write, and push to protected branches
 lore-auth revoke alice my-game
 
 lore-auth repo list
@@ -37,14 +39,18 @@ Administrators can also do all of this remotely, from a GUI client, through the 
 
 | Who | Access |
 |---|---|
-| Administrator | every repository, including delete and lock management |
-| User with a grant for a repository, or the `*` grant | clone, pull, push |
+| Administrator | every repository, including delete, lock management and pushes to protected branches |
+| User with a write grant for a repository, or the `*` grant | clone, pull, push, branches, locks |
+| User with a read-only grant (`--read-only`) | clone and pull only: Lore refuses pushes, new branches, locks and metadata changes |
+| User with a write grant and `--push-protected` | as a write grant, and pushes to protected branches |
 | Creator of a repository | clone, pull, push on that repository |
 | Anyone else | nothing; the repository is hidden from `lore repository list` |
 
 `policy.repository_create` controls whether every signed-in user (`everyone`) or only administrators (`admins`) can create repositories. Only the creator or an administrator can delete a repository.
 
-A grant gives full access: reading and writing. Lore 0.13 added a read-only level; this service does not offer it yet.
+A grant is write access unless it is made with `--read-only` (Lore 0.13 and later tell the two apart). Grants made before access levels existed are write access. Running `grant` again for the same user and repository changes the access. A grant to one repository and the `*` grant add up: the wider access wins.
+
+A protected branch takes pushes only from users with the `push-protected` right: administrators, and users granted `--push-protected` (which needs write access). Everyone else brings changes into it by merging. Only the repository's owner, an administrator or its creator can protect or unprotect a branch (Lore 0.13 and later).
 
 ## Using it as a Lore user
 

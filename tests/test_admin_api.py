@@ -107,7 +107,7 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(
             body,
             {"protocol": "lore-admin", "version": 1, "base": "/api/v1",
-             "features": ["users", "grants", "repositories", "api-keys", "servers"]},
+             "features": ["users", "grants", "grant-access", "repositories", "api-keys", "servers"]},
         )
         self.assertError(self.call("POST", "/.well-known/lore-admin", body={}), 405, "method_not_allowed")
 
@@ -359,13 +359,13 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(self.call("PUT", "/api/v1/users/root/password", self.root, new_password)[0], 204)
 
     def test_grants(self):
-        game = {"user": "alice", "repository": "a" * 32, "repositoryName": "game"}
+        game = {"user": "alice", "repository": "a" * 32, "repositoryName": "game", "access": "write", "pushProtected": False}
         self.assertEqual(self.call("GET", "/api/v1/grants", self.root)[:2], (200, {"grants": [game]}))
 
         status, body, _ = self.call("PUT", "/api/v1/grants", self.root, {"user": "bob", "repository": "secret"})
-        self.assertEqual((status, body), (200, {"user": "bob", "repository": "b" * 32, "repositoryName": "secret"}))
+        self.assertEqual((status, body), (200, {"user": "bob", "repository": "b" * 32, "repositoryName": "secret", "access": "write", "pushProtected": False}))
         status, body, _ = self.call("PUT", "/api/v1/grants", self.root, {"user": "bob", "repository": "*"})
-        self.assertEqual((status, body), (200, {"user": "bob", "repository": "*", "repositoryName": None}))
+        self.assertEqual((status, body), (200, {"user": "bob", "repository": "*", "repositoryName": None, "access": "write", "pushProtected": False}))
         unregistered = {"user": "bob", "repository": "urc-" + "d" * 32}
         status, body, _ = self.call("PUT", "/api/v1/grants", self.root, unregistered)
         self.assertEqual((status, body["repository"], body["repositoryName"]), (200, "d" * 32, None))
@@ -396,6 +396,19 @@ class AdminApiTest(unittest.TestCase):
         self.assertError(self.call("PUT", "/api/v1/grants", self.root, {"user": "bob", "repository": "game"}),
                          409, "conflict")
 
+        # Access levels: read only, then write with pushes to protected branches.
+        status, body, _ = self.call("PUT", "/api/v1/grants", self.root, {"user": "bob", "repository": "secret", "access": "read"})
+        self.assertEqual((status, body["access"], body["pushProtected"]), (200, "read", False))
+        status, body, _ = self.call("PUT", "/api/v1/grants", self.root,
+                                    {"user": "bob", "repository": "secret", "access": "write", "pushProtected": True})
+        self.assertEqual((status, body["access"], body["pushProtected"]), (200, "write", True))
+        self.assertError(self.call("PUT", "/api/v1/grants", self.root, {"user": "bob", "repository": "secret", "access": "all"}),
+                         400, "invalid_request")
+        self.assertError(self.call("PUT", "/api/v1/grants", self.root,
+                                   {"user": "bob", "repository": "secret", "access": "read", "pushProtected": True}),
+                         400, "invalid_request")
+        self.assertError(self.call("PUT", "/api/v1/grants", self.root, {"user": "bob", "repository": "secret", "pushProtected": "yes"}),
+                         400, "invalid_request")
         secret = {"user": "bob", "repository": "secret"}
         self.assertEqual(self.call("DELETE", "/api/v1/grants", self.root, secret)[0], 204)
         self.assertEqual(self.call("DELETE", "/api/v1/grants", self.root, secret)[0], 204)  # idempotent
@@ -484,7 +497,7 @@ class AdminApiTest(unittest.TestCase):
         for secret in ("first-secret-pw", "second-secret-pw", key, self.root):
             self.assertNotIn(secret, output)
         for action in ("created user carol", "changed the password of user carol", "created API key",
-                       "granted carol access to " + "a" * 32, "deleted user carol"):
+                       "granted carol write access to " + "a" * 32, "deleted user carol"):
             self.assertTrue(re.search(rf"admin root from 127\.0\.0\.1: {re.escape(action)}", output), action)
 
 

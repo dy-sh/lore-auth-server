@@ -71,7 +71,7 @@ Content-Type: application/json
   "protocol": "lore-admin",
   "version": 1,
   "base": "/api/v1",
-  "features": ["users", "grants", "repositories", "api-keys", "servers"]
+  "features": ["users", "grants", "grant-access", "repositories", "api-keys", "servers"]
 }
 ```
 
@@ -87,6 +87,7 @@ Content-Type: application/json
 | — | `GET /me` is always available. |
 | `users` | `GET /users`, `POST /users`, `PATCH /users/{name}`, `PUT /users/{name}/password`, `DELETE /users/{name}` |
 | `grants` | `GET /grants`, `PUT /grants`, `DELETE /grants` |
+| `grant-access` | Grants carry an access level (`access`: `read` or `write`) and `pushProtected`, see [Grants](#grants). Without it every grant is write access. |
 | `repositories` | `GET /repositories` |
 | `api-keys` | `GET /api-keys`, `POST /api-keys`, `DELETE /api-keys/{name}` |
 | `servers` | `GET /servers`, `PUT /servers`, `DELETE /servers` |
@@ -279,7 +280,7 @@ A server SHOULD refuse with `409 conflict` to delete the caller's own account. E
 A grant gives one user access to one repository, or to every repository with `*`. A grant object:
 
 ```json
-{"user": "alice", "repository": "0198f3c2a1b47c55a0e2d4f6b8c9e012", "repositoryName": "my-game"}
+{"user": "alice", "repository": "0198f3c2a1b47c55a0e2d4f6b8c9e012", "repositoryName": "my-game", "access": "write", "pushProtected": false}
 ```
 
 | Field | Type | Meaning |
@@ -287,6 +288,8 @@ A grant gives one user access to one repository, or to every repository with `*`
 | `user` | string | User name. |
 | `repository` | string | Repository ID, or `*` for every repository. |
 | `repositoryName` | string or `null` | The repository's name if the server knows it; `null` for `*` and for unknown repositories. |
+| `access` | string | `read` (clone and get changes) or `write` (also push, branches, locks). Only with the `grant-access` feature. |
+| `pushProtected` | boolean | The user may also push to protected branches; always `false` for `read`. Only with the `grant-access` feature. |
 
 Grants are only the explicit ones. Access the server gives in other ways, for example to administrators or to the user who created a repository, isn't listed.
 
@@ -317,15 +320,15 @@ HTTP/1.1 200 OK
 
 {
   "grants": [
-    {"user": "alice", "repository": "*", "repositoryName": null},
-    {"user": "alice", "repository": "0198f3c2a1b47c55a0e2d4f6b8c9e012", "repositoryName": "my-game"}
+    {"user": "alice", "repository": "*", "repositoryName": null, "access": "read", "pushProtected": false},
+    {"user": "alice", "repository": "0198f3c2a1b47c55a0e2d4f6b8c9e012", "repositoryName": "my-game", "access": "write", "pushProtected": false}
   ]
 }
 ```
 
 #### PUT /grants
 
-Gives a user access to a repository. Granting access that already exists isn't an error.
+Gives a user access to a repository, or changes the access they have. Granting access that already exists isn't an error. With the `grant-access` feature the body may carry `access` (`read` or `write`, default `write`) and `pushProtected` (default `false`); `pushProtected` with `read` is `400 invalid_request`.
 
 ```http
 PUT /api/v1/grants
@@ -337,7 +340,7 @@ Content-Type: application/json
 ```http
 HTTP/1.1 200 OK
 
-{"user": "alice", "repository": "0198f3c2a1b47c55a0e2d4f6b8c9e012", "repositoryName": "my-game"}
+{"user": "alice", "repository": "0198f3c2a1b47c55a0e2d4f6b8c9e012", "repositoryName": "my-game", "access": "write", "pushProtected": false}
 ```
 
 `repository` is a repository ID, `*`, or a known repository name. A server MAY accept the ID of a repository it doesn't know yet. lore-auth-server does, and the grant applies to that repository.
