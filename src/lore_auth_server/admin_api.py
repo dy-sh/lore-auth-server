@@ -26,7 +26,7 @@ PROTOCOL = "lore-admin"
 VERSION = 1
 DISCOVERY_PATH = "/.well-known/lore-admin"
 BASE = "/api/v1"
-FEATURES = ["users", "grants", "grant-access", "repositories", "api-keys", "servers"]
+FEATURES = ["users", "grants", "grant-access", "repositories", "api-keys", "servers", "password-change", "admin-visibility"]
 MAX_BODY_BYTES = 8192
 _DRAIN_LIMIT_BYTES = 1 << 20
 MAX_TEXT_LENGTH = 128  # display names and API key labels
@@ -76,6 +76,7 @@ def _route(method: str, path: str, handler: str, **options) -> _Route:
 
 ROUTES = [
     _route("GET", "me", "get_me", admin=False),
+    _route("PUT", "me/password", "change_own_password", body=True, admin=False),
     _route("GET", "users", "list_users", admin=False),
     _route("POST", "users", "create_user", body=True),
     _route("PATCH", "users/{}", "update_user", body=True),
@@ -155,7 +156,13 @@ def _repository_id(resource_id: str) -> str:
 
 
 def _user_json(user: User) -> dict:
-    return {"name": user.name, "displayName": user.display_name, "admin": user.is_admin, "disabled": user.disabled}
+    return {
+        "name": user.name,
+        "displayName": user.display_name,
+        "admin": user.is_admin,
+        "disabled": user.disabled,
+        "visibleToUsers": user.visible_to_users,
+    }
 
 
 def _api_key_json(key: ApiKey) -> dict:
@@ -163,10 +170,12 @@ def _api_key_json(key: ApiKey) -> dict:
 
 
 class AdminApi:
-    def __init__(self, authority: Authority, throttle: Throttle):
+    def __init__(self, authority: Authority, throttle: Throttle, password_throttle: Throttle | None = None):
         self.a = authority
         self.store = authority.store
         self.throttle = throttle
+        # Wrong current passwords, counted per account: guessing one needs its token already.
+        self.password_throttle = password_throttle or throttle
         self.enabled = authority.config.admin_api
 
     def handles(self, path: str) -> bool:
@@ -354,7 +363,7 @@ class AdminApi:
         # where it is a person of a repository they share (its creator or holding a grant to it).
         if not call.user.is_admin:
             seen = self._people_around(call.user.name)
-            users = [u for u in users if not u.disabled and (not u.is_admin or u.name in seen)]
+            users = [u for u in users if not u.disabled and (not u.is_admin or u.visible_to_users or u.name in seen)]
         return Response(200, {"users": [_user_json(u) for u in users]})
 
     def _people_around(self, name: str) -> set[str]:
@@ -382,9 +391,9 @@ class AdminApi:
         return Response(201, _user_json(self._require_user(name)))
 
     def update_user(self, call: _Call) -> Response:
-        body = _fields(call.body, {}, {"displayName": str, "admin": bool, "disabled": bool})
+        body = _fields(call.body, {}, {"displayName": str, "admin": bool, "disabled": bool, "visibleToUsers": bool})
         if not body:
-            raise _bad_request("nothing to change: send displayName, admin or disabled")
+            raise _bad_request("nothing to change: send displayName, admin, disabled or visibleToUsers")
         name = call.params[0]
         display_name = _text(body["displayName"], "displayName") if "displayName" in body else None
         self._require_user(name)
@@ -396,7 +405,11 @@ class AdminApi:
             self.store.set_admin(name, body["admin"])
         if "disabled" in body:
             self.store.set_disabled(name, body["disabled"])
-        changes = ", ".join(f"{key}={body[key]!r}" for key in ("displayName", "admin", "disabled") if key in body)
+        if "visibleToUsers" in body:
+            self.store.set_visible_to_users(name, body["visibleToUsers"])
+        changes = ", ".join(
+            f"{key}={body[key]!r}" for key in ("displayName", "admin", "disabled", "visibleToUsers") if key in body
+        )
         self._audit(call, "updated user %s: %s", name, changes)
         return Response(200, _user_json(self._require_user(name)))
 
@@ -405,6 +418,22 @@ class AdminApi:
         name = call.params[0]
         self.store.set_password(name, body["password"])
         self._audit(call, "changed the password of user %s", name)
+        return Response(204)
+
+    def change_own_password(self, call: _Call) -> Response:
+        body = _fields(call.body, {"currentPassword": str, "password": str})
+        name = call.user.name
+        if self.password_throttle.blocked(name):
+            raise ApiError(
+                429, "too_many_requests", "too many wrong passwords, try again later",
+                {"Retry-After": str(self.password_throttle.window)},
+            )
+        if self.store.check_password(name, body["currentPassword"]) is None:
+            self.password_throttle.fail(name)
+            log.warning("admin API: wrong current password of user %s from %s", name, call.address)
+            raise ApiError(403, "wrong_password", "the current password is wrong")
+        self.store.set_password(name, body["password"])
+        log.info("user %s changed their password from %s", name, call.address)
         return Response(204)
 
     def delete_user(self, call: _Call) -> Response:

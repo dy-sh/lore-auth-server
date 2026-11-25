@@ -111,7 +111,9 @@ def build_parser() -> argparse.ArgumentParser:
     pw.add_argument("name")
     pw.add_argument("--password-stdin", action="store_true")
     for name, help_text in (("remove", "delete a user"), ("disable", "block sign-in"), ("enable", "allow sign-in"),
-                            ("make-admin", "grant administrator rights"), ("drop-admin", "revoke administrator rights")):
+                            ("make-admin", "grant administrator rights"), ("drop-admin", "revoke administrator rights"),
+                            ("show-admin", "list an administrator to every user"),
+                            ("hide-admin", "list an administrator only where they work")):
         user.add_parser(name, help=help_text).add_argument("name")
     user.add_parser("list", help="list users and their grants")
 
@@ -184,10 +186,14 @@ def _admin_command(args, store: Store) -> None:
         elif args.action in ("make-admin", "drop-admin"):
             store.set_admin(args.name, args.action == "make-admin")
             print("done")
+        elif args.action in ("show-admin", "hide-admin"):
+            store.set_visible_to_users(args.name, args.action == "show-admin")
+            print("done")
         elif args.action == "list":
             names = {r.resource_id: r.name for r in store.list_repositories()}
             for u in store.list_users():
-                flags = ", ".join(f for f, on in (("admin", u.is_admin), ("disabled", u.disabled)) if on)
+                flags = ", ".join(f for f, on in (("admin", u.is_admin), ("listed", u.is_admin and u.visible_to_users),
+                                                   ("disabled", u.disabled)) if on)
                 grants = [
                     ("all" if g.resource_id == "urc-*" else names.get(g.resource_id, g.resource_id))
                     + (" (read)" if g.access == "read" else " (+protected)" if g.push_protected else "")

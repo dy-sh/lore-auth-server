@@ -91,6 +91,8 @@ Content-Type: application/json
 | `repositories` | `GET /repositories` |
 | `api-keys` | `GET /api-keys`, `POST /api-keys`, `DELETE /api-keys/{name}` |
 | `servers` | `GET /servers`, `PUT /servers`, `DELETE /servers` |
+| `password-change` | `PUT /me/password`: every user changes their own password. |
+| `admin-visibility` | Users carry `visibleToUsers`, which `PATCH /users/{name}` changes, see [Users](#users). |
 
 A server that has the API turned off answers `404` here, like a server that doesn't implement it.
 
@@ -162,19 +164,45 @@ HTTP/1.1 200 OK
 | `displayName` | string | Name to show in the interface. |
 | `admin` | boolean | Whether the user is an administrator and may use the rest of the API. |
 
+### PUT /me/password
+
+Changes the signed-in user's own password. Available to every user; the current password is required.
+
+| Field | Type | |
+|---|---|---|
+| `currentPassword` | string | Required. |
+| `password` | string | Required. The new password. |
+
+```http
+PUT /api/v1/me/password
+Content-Type: application/json
+
+{"currentPassword": "old long password", "password": "new long password"}
+```
+
+```http
+HTTP/1.1 204 No Content
+```
+
+The old password stops working at once. Tokens issued before the change stay valid until they expire.
+
+Errors: `403 wrong_password` when `currentPassword` is wrong, `400 invalid_request` for a new password the server doesn't accept, `429 too_many_requests` after repeated wrong passwords for the account (wait for `Retry-After` seconds). Requires the `password-change` feature.
+
 ### Users
 
 A user object:
 
 ```json
-{"name": "alice", "displayName": "Alice Smith", "admin": false, "disabled": false}
+{"name": "alice", "displayName": "Alice Smith", "admin": false, "disabled": false, "visibleToUsers": false}
 ```
 
 `disabled` users can't sign in, exchange tokens or use this API. Their grants and API keys are kept.
 
+`visibleToUsers` (with the `admin-visibility` feature) lists an administrator to every user, so that anyone can share a repository with them. It has no effect on users who aren't administrators: everyone sees them anyway.
+
 #### GET /users
 
-Available to every user, so that anyone can pick whom to share a repository with. A user who isn't an administrator doesn't see disabled accounts, nor administrators, except those who work in a repository the user can use: its creator or someone with a grant to it. Administrators see everyone.
+Available to every user, so that anyone can pick whom to share a repository with. A user who isn't an administrator doesn't see disabled accounts, nor administrators, except those with `visibleToUsers` and those who work in a repository the user can use: its creator or someone with a grant to it. Administrators see everyone.
 
 ```http
 GET /api/v1/users
@@ -185,8 +213,8 @@ HTTP/1.1 200 OK
 
 {
   "users": [
-    {"name": "alice", "displayName": "Alice Smith", "admin": false, "disabled": false},
-    {"name": "root", "displayName": "root", "admin": true, "disabled": false}
+    {"name": "alice", "displayName": "Alice Smith", "admin": false, "disabled": false, "visibleToUsers": false},
+    {"name": "root", "displayName": "root", "admin": true, "disabled": false, "visibleToUsers": false}
   ]
 }
 ```
@@ -212,7 +240,7 @@ Content-Type: application/json
 ```http
 HTTP/1.1 201 Created
 
-{"name": "bob", "displayName": "Bob Jones", "admin": false, "disabled": false}
+{"name": "bob", "displayName": "Bob Jones", "admin": false, "disabled": false, "visibleToUsers": false}
 ```
 
 Errors: `409 conflict` if the user exists, `400 invalid_request` for a name or password the server doesn't accept.
@@ -226,6 +254,7 @@ Changes a user. Send at least one field; fields you leave out keep their values.
 | `displayName` | string | An empty string resets it to the user name. |
 | `admin` | boolean | Grant or revoke administrator rights. |
 | `disabled` | boolean | Block or allow sign-in. |
+| `visibleToUsers` | boolean | List an administrator to every user (feature `admin-visibility`). |
 
 ```http
 PATCH /api/v1/users/bob
@@ -237,7 +266,7 @@ Content-Type: application/json
 ```http
 HTTP/1.1 200 OK
 
-{"name": "bob", "displayName": "Bob Jones", "admin": true, "disabled": false}
+{"name": "bob", "displayName": "Bob Jones", "admin": true, "disabled": false, "visibleToUsers": false}
 ```
 
 A server SHOULD refuse with `409 conflict` a request that removes the caller's own administrator rights or disables the caller's own account, so that an administrator can't lock themselves out by mistake. Another administrator can still make that change.

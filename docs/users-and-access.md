@@ -8,6 +8,7 @@ lore-auth user add bob --display-name "Bob Smith"
 lore-auth user passwd alice
 lore-auth user disable alice                # block sign-in, keep grants
 lore-auth user make-admin alice
+lore-auth user show-admin alice             # list this administrator to every user
 lore-auth user remove alice
 lore-auth user list
 
@@ -33,7 +34,9 @@ Changes apply immediately: no token reissue is needed. A user who already has an
 
 Use `--password-stdin` with `user add` and `user passwd` to script account creation.
 
-Administrators can also do all of this remotely, from a GUI client, through the [admin API](admin-api.md).
+Administrators can also do all of this remotely, from a GUI client, through the [admin API](admin-api.md). Every user can change their own password there (`PUT /me/password`, with the current one).
+
+A user who isn't an administrator sees administrators in the list of people only where they work together (an administrator who created a repository the user can use or has a grant to it), so administrators don't crowd every list. `user show-admin` lists an administrator to everyone, so that anyone can share a repository with them; `user hide-admin` undoes it.
 
 ## Access rules
 

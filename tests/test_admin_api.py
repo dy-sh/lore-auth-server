@@ -107,7 +107,8 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(
             body,
             {"protocol": "lore-admin", "version": 1, "base": "/api/v1",
-             "features": ["users", "grants", "grant-access", "repositories", "api-keys", "servers"]},
+             "features": ["users", "grants", "grant-access", "repositories", "api-keys", "servers",
+                          "password-change", "admin-visibility"]},
         )
         self.assertError(self.call("POST", "/.well-known/lore-admin", body={}), 405, "method_not_allowed")
 
@@ -267,6 +268,57 @@ class AdminApiTest(unittest.TestCase):
         status, body, _ = self.call("GET", "/api/v1/users", self.alice)
         self.assertEqual([u["name"] for u in body["users"]], ["ada", "alice", "bob"])
 
+    def test_administrator_visible_to_users(self):
+        self.store.add_user("ada", "ada-password", is_admin=True)
+        status, body, _ = self.call("GET", "/api/v1/users", self.alice)
+        self.assertNotIn("ada", [u["name"] for u in body["users"]])
+        status, body, _ = self.call("PATCH", "/api/v1/users/ada", self.root, {"visibleToUsers": True})
+        self.assertEqual((status, body["visibleToUsers"]), (200, True))
+        status, body, _ = self.call("GET", "/api/v1/users", self.alice)
+        self.assertIn("ada", [u["name"] for u in body["users"]])
+        # Alice may then share her repository with ada.
+        self.assertEqual(self.call("PUT", "/api/v1/grants", self.alice, {"user": "ada", "repository": REPO_A})[0], 200)
+        self.assertEqual(self.call("PATCH", "/api/v1/users/ada", self.root, {"visibleToUsers": False})[0], 200)
+        self.store.revoke("ada", REPO_A)
+        status, body, _ = self.call("GET", "/api/v1/users", self.alice)
+        self.assertNotIn("ada", [u["name"] for u in body["users"]])
+        # Only administrators change it; a disabled administrator stays hidden.
+        self.assertError(self.call("PATCH", "/api/v1/users/ada", self.alice, {"visibleToUsers": True}), 403, "forbidden")
+        self.store.set_visible_to_users("ada", True)
+        self.store.set_disabled("ada", True)
+        status, body, _ = self.call("GET", "/api/v1/users", self.alice)
+        self.assertNotIn("ada", [u["name"] for u in body["users"]])
+        self.assertError(self.call("PATCH", "/api/v1/users/ada", self.root, {"visibleToUsers": "yes"}), 400, "invalid_request")
+
+    def test_change_own_password(self):
+        change = {"currentPassword": "alice-password", "password": "alice-new-password"}
+        self.assertEqual(self.call("PUT", "/api/v1/me/password", self.alice, change)[0], 204)
+        self.assertIsNotNone(self.store.check_password("alice", "alice-new-password"))
+        self.assertIsNone(self.store.check_password("alice", "alice-password"))
+        # The old one no longer counts as the current password.
+        self.assertError(self.call("PUT", "/api/v1/me/password", self.alice, change), 403, "wrong_password")
+        short = {"currentPassword": "alice-new-password", "password": "short"}
+        self.assertError(self.call("PUT", "/api/v1/me/password", self.alice, short), 400, "invalid_request")
+        self.assertError(self.call("PUT", "/api/v1/me/password", self.alice, {"password": "long-enough"}),
+                         400, "invalid_request")
+        self.assertError(self.call("PUT", "/api/v1/me/password", None, change), 401, "unauthenticated")
+        self.assertIsNotNone(self.store.check_password("alice", "alice-new-password"))
+
+    def test_wrong_current_passwords_are_throttled(self):
+        wrong = {"currentPassword": "not-it-at-all", "password": "alice-new-password"}
+        for _ in range(4):
+            self.assertError(self.call("PUT", "/api/v1/me/password", self.alice, wrong), 403, "wrong_password")
+        result = self.call("PUT", "/api/v1/me/password", self.alice, wrong)
+        self.assertEqual(result[0], 403)
+        result = self.call("PUT", "/api/v1/me/password", self.alice,
+                           {"currentPassword": "alice-password", "password": "alice-new-password"})
+        self.assertError(result, 429, "too_many_requests")
+        self.assertIsNotNone(self.store.check_password("alice", "alice-password"))
+        # Another account is not held back by alice's mistakes.
+        bob = self.token("bob")
+        ok = {"currentPassword": "bob-password", "password": "bob-new-password"}
+        self.assertEqual(self.call("PUT", "/api/v1/me/password", bob, ok)[0], 204)
+
     def test_disabled_user_is_refused(self):
         self.store.add_user("dave", "dave-password", is_admin=True)
         dave = self.token("dave")
@@ -289,16 +341,16 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(
             body["users"],
             [
-                {"name": "alice", "displayName": "alice", "admin": False, "disabled": False},
-                {"name": "bob", "displayName": "bob", "admin": False, "disabled": False},
-                {"name": "root", "displayName": "Root", "admin": True, "disabled": False},
+                {"name": "alice", "displayName": "alice", "admin": False, "disabled": False, "visibleToUsers": False},
+                {"name": "bob", "displayName": "bob", "admin": False, "disabled": False, "visibleToUsers": False},
+                {"name": "root", "displayName": "Root", "admin": True, "disabled": False, "visibleToUsers": False},
             ],
         )
 
         created = {"name": "carol", "password": "carol-password", "displayName": " Carol Smith "}
         status, body, _ = self.call("POST", "/api/v1/users", self.root, created)
         self.assertEqual(status, 201)
-        self.assertEqual(body, {"name": "carol", "displayName": "Carol Smith", "admin": False, "disabled": False})
+        self.assertEqual(body, {"name": "carol", "displayName": "Carol Smith", "admin": False, "disabled": False, "visibleToUsers": False})
         self.assertIsNotNone(self.store.check_password("carol", "carol-password"))
         status, body, _ = self.call("POST", "/api/v1/users", self.root,
                                     {"name": "dave", "password": "dave-password", "admin": True})
@@ -321,9 +373,9 @@ class AdminApiTest(unittest.TestCase):
         self.assertIsNone(self.store.get_user("erin"))
 
         status, body, _ = self.call("PATCH", "/api/v1/users/carol", self.root,
-                                    {"displayName": "Carol S.", "admin": True, "disabled": True})
+                                    {"displayName": "Carol S.", "admin": True, "disabled": True, "visibleToUsers": False})
         self.assertEqual(status, 200)
-        self.assertEqual(body, {"name": "carol", "displayName": "Carol S.", "admin": True, "disabled": True})
+        self.assertEqual(body, {"name": "carol", "displayName": "Carol S.", "admin": True, "disabled": True, "visibleToUsers": False})
         self.assertIsNone(self.store.check_password("carol", "carol-password"))  # disabled
         status, body, _ = self.call("PATCH", "/api/v1/users/carol", self.root, {"disabled": False, "displayName": ""})
         self.assertEqual((status, body["disabled"], body["displayName"]), (200, False, "carol"))
@@ -349,7 +401,7 @@ class AdminApiTest(unittest.TestCase):
 
     def test_admin_cannot_lock_themselves_out(self):
         self.assertError(self.call("PATCH", "/api/v1/users/root", self.root, {"admin": False}), 409, "conflict")
-        self.assertError(self.call("PATCH", "/api/v1/users/root", self.root, {"disabled": True}), 409, "conflict")
+        self.assertError(self.call("PATCH", "/api/v1/users/root", self.root, {"disabled": True, "visibleToUsers": False}), 409, "conflict")
         self.assertError(self.call("DELETE", "/api/v1/users/root", self.root), 409, "conflict")
         root = self.store.get_user("root")
         self.assertTrue(root.is_admin and not root.disabled)

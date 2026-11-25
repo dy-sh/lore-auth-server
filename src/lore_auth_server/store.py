@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     is_admin      INTEGER NOT NULL DEFAULT 0,
     disabled      INTEGER NOT NULL DEFAULT 0,
+    visible_to_users INTEGER NOT NULL DEFAULT 0,
     created_at    INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS repositories (
@@ -130,6 +131,8 @@ class User:
     display_name: str
     is_admin: bool
     disabled: bool
+    # An administrator listed to every user, who may then share repositories with them.
+    visible_to_users: bool = False
 
 
 @dataclass
@@ -179,6 +182,9 @@ class Store:
                 self._db.execute("ALTER TABLE grants ADD COLUMN access TEXT NOT NULL DEFAULT 'write'")
             if "push_protected" not in columns:
                 self._db.execute("ALTER TABLE grants ADD COLUMN push_protected INTEGER NOT NULL DEFAULT 0")
+            user_columns = {r[1] for r in self._db.execute("PRAGMA table_info(users)").fetchall()}
+            if "visible_to_users" not in user_columns:
+                self._db.execute("ALTER TABLE users ADD COLUMN visible_to_users INTEGER NOT NULL DEFAULT 0")
 
     def close(self) -> None:
         with self._lock:
@@ -205,16 +211,18 @@ class Store:
             (name, display_name or name, hash_password(password), int(is_admin), int(time.time())),
         )
 
+    _USER_COLUMNS = "name, display_name, is_admin, disabled, visible_to_users"
+
+    @staticmethod
+    def _user(r: sqlite3.Row) -> User:
+        return User(r["name"], r["display_name"], bool(r["is_admin"]), bool(r["disabled"]), bool(r["visible_to_users"]))
+
     def get_user(self, name: str) -> User | None:
-        rows = self._query("SELECT name, display_name, is_admin, disabled FROM users WHERE name = ?", (name,))
-        if not rows:
-            return None
-        r = rows[0]
-        return User(r["name"], r["display_name"], bool(r["is_admin"]), bool(r["disabled"]))
+        rows = self._query(f"SELECT {self._USER_COLUMNS} FROM users WHERE name = ?", (name,))
+        return self._user(rows[0]) if rows else None
 
     def list_users(self) -> list[User]:
-        rows = self._query("SELECT name, display_name, is_admin, disabled FROM users ORDER BY name")
-        return [User(r["name"], r["display_name"], bool(r["is_admin"]), bool(r["disabled"])) for r in rows]
+        return [self._user(r) for r in self._query(f"SELECT {self._USER_COLUMNS} FROM users ORDER BY name")]
 
     def check_password(self, name: str, password: str) -> User | None:
         rows = self._query("SELECT password_hash FROM users WHERE name = ?", (name,))
@@ -236,6 +244,10 @@ class Store:
 
     def set_admin(self, name: str, is_admin: bool) -> None:
         if not self._execute("UPDATE users SET is_admin = ? WHERE name = ?", (int(is_admin), name)):
+            raise NotFoundError(f"no such user: {name}")
+
+    def set_visible_to_users(self, name: str, visible: bool) -> None:
+        if not self._execute("UPDATE users SET visible_to_users = ? WHERE name = ?", (int(visible), name)):
             raise NotFoundError(f"no such user: {name}")
 
     def set_disabled(self, name: str, disabled: bool) -> None:

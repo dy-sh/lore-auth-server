@@ -102,7 +102,7 @@ def make_handler(authority: Authority):
         server_version = "lore-auth-server"
         sys_version = ""
         # Separate from the login page throttle, so that one cannot lock users out of the other.
-        admin_api = AdminApi(authority, Throttle())
+        admin_api = AdminApi(authority, Throttle(), Throttle())
 
         def log_message(self, fmt, *args):
             log.debug("%s %s", self.client_address[0], fmt % args)

@@ -236,6 +236,8 @@ class FlowTest(unittest.TestCase):
         try:
             [grant] = store.grant_details("old")
             self.assertEqual((grant.access, grant.push_protected), ("write", False))
+            # Users made before administrators could be listed to everyone stay unlisted.
+            self.assertFalse(store.get_user("old").visible_to_users)
         finally:
             store.close()
 
